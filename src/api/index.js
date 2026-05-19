@@ -1,7 +1,11 @@
 import axios from 'axios';
 
+// In dev, leave VITE_API_BASE_URL unset to use the Vite proxy at `/api`.
+// In prod, set it to the full API origin, e.g. `https://api.slotlii.com/api`.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 });
 
