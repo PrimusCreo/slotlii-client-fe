@@ -55,6 +55,8 @@ export const completeOnboarding = (id) =>
   api.post(`/clinics/${id}/onboarding-complete`);
 export const connectWhatsAppEmbeddedSignup = (id, payload) =>
   api.post(`/clinics/${id}/whatsapp/embedded-signup`, payload);
+export const registerWhatsApp = (id, payload) =>
+  api.post(`/clinics/${id}/whatsapp/register`, payload);
 export const disconnectWhatsApp = (id) =>
   api.post(`/clinics/${id}/whatsapp/disconnect`);
 
