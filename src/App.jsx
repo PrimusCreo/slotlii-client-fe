@@ -8,6 +8,9 @@ import { Toaster } from './components/ui/sonner';
 import ProtectedRoute from './components/ProtectedRoute';
 
 import Login from './pages/Login';
+import Signup from './pages/Signup';
+import VerifyEmail from './pages/VerifyEmail';
+import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Appointments from './pages/Appointments';
 import NewAppointment from './pages/NewAppointment';
@@ -27,6 +30,10 @@ export default function App() {
             <ClinicProvider>
               <Routes>
                 <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Signup />} />
+                <Route path="/verify-email" element={<VerifyEmail />} />
+                <Route path="/set-password" element={<VerifyEmail />} />
+                <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/appointments" element={<ProtectedRoute><Appointments /></ProtectedRoute>} />
                 <Route path="/appointments/new" element={<ProtectedRoute><NewAppointment /></ProtectedRoute>} />

@@ -3,17 +3,10 @@ import {
   AlertCircle,
   Building2,
   CheckCircle2,
-  ChevronDown,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  Info,
-  Link2Off,
   Loader2,
   MessageSquare,
-  Save,
-  Settings as SettingsIcon,
-  ShieldCheck,
+  Pencil,
+  Link2Off,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,48 +25,59 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const FB_CONFIG_ID = import.meta.env.VITE_FACEBOOK_CONFIG_ID;
+const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
+
+const emptyProfile = {
+  name: '',
+  phone: '',
+  address: '',
+  workingHoursStart: '09:00',
+  workingHoursEnd: '18:00',
+  slotDuration: 30,
+};
+
+function clinicToProfile(c) {
+  if (!c) return emptyProfile;
+  return {
+    name: c.name || '',
+    phone: c.phone || '',
+    address: c.address || '',
+    workingHoursStart: c.workingHours?.start || '09:00',
+    workingHoursEnd: c.workingHours?.end || '18:00',
+    slotDuration: c.slotDuration || 30,
+  };
+}
 
 export default function Settings() {
-  const { selectedClinic, selectedClinicId, setSelectedClinic } = useClinic();
+  const { selectedClinic, selectedClinicId, setSelectedClinic, loading } =
+    useClinic();
   const { ready: fbReady, error: fbError } = useFacebookSdk();
 
-  const [waForm, setWaForm] = useState({
-    apiUrl: '',
-    phoneNumberId: '',
-    accessToken: '',
-    verifyToken: '',
-  });
-  const [showAccessToken, setShowAccessToken] = useState(false);
-  const [savingWA, setSavingWA] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [profile, setProfile] = useState(emptyProfile);
+  const [savingProfile, setSavingProfile] = useState(false);
+
   const [connectingWA, setConnectingWA] = useState(false);
   const [disconnectingWA, setDisconnectingWA] = useState(false);
 
   const wc = selectedClinic?.whatsappConfig || {};
   const waConfigured = !!(wc.phoneNumberId && wc.accessToken);
-  const connectedViaSignup = wc.tokenSource === 'embedded_signup';
 
-  // Cache the phone_number_id + waba_id that Meta posts during the popup
-  // flow. Meta sends these via window.postMessage, separately from the
-  // OAuth `code` that arrives in the FB.login callback.
+  // Cache the phone_number_id + waba_id Meta posts during the popup flow.
+  // Meta sends them via window.postMessage, separately from FB.login's `code`.
   const signupAssetsRef = useRef({ phoneNumberId: null, wabaId: null });
 
+  // Hydrate the editable profile whenever the clinic loads or changes.
   useEffect(() => {
-    if (selectedClinic?.whatsappConfig) {
-      const c = selectedClinic.whatsappConfig;
-      setWaForm({
-        apiUrl: c.apiUrl || 'https://graph.facebook.com/v25.0',
-        phoneNumberId: c.phoneNumberId || '',
-        accessToken: c.accessToken || '',
-        verifyToken: c.verifyToken || '',
-      });
-    }
+    setProfile(clinicToProfile(selectedClinic));
   }, [selectedClinic]);
 
-  // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the
-  // user finishes adding their phone number inside the popup, before
-  // FB.login's callback resolves.
+  // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the user
+  // finishes adding their phone number inside the popup, before FB.login's
+  // callback resolves.
   useEffect(() => {
     function handleSignupMessage(event) {
       if (!event.origin || !event.origin.endsWith('facebook.com')) return;
@@ -81,8 +85,6 @@ export default function Settings() {
         const data =
           typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
-        // v4 may emit FINISH, FINISH_ONLY_WABA, FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING,
-        // FINISH_OBO_MIGRATION, FINISH_GRANT_ONLY_API_ACCESS — all indicate success and carry IDs.
         if (typeof data.event === 'string' && data.event.startsWith('FINISH')) {
           signupAssetsRef.current = {
             phoneNumberId: data.data?.phone_number_id,
@@ -187,107 +189,123 @@ export default function Settings() {
     }
   }
 
-  async function handleSaveWhatsApp(e) {
+  function startEdit() {
+    setProfile(clinicToProfile(selectedClinic));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setProfile(clinicToProfile(selectedClinic));
+    setEditing(false);
+  }
+
+  async function handleSaveProfile(e) {
     e.preventDefault();
     if (!selectedClinicId) return;
-
-    if (!waForm.phoneNumberId || !waForm.accessToken) {
-      toast.error('Phone Number ID and Access Token are required');
+    if (!profile.name.trim()) {
+      toast.error('Clinic name is required');
+      return;
+    }
+    if (profile.workingHoursEnd <= profile.workingHoursStart) {
+      toast.error('Working hours end must be after start');
       return;
     }
 
-    setSavingWA(true);
+    setSavingProfile(true);
     try {
       const res = await api.updateClinic(selectedClinicId, {
-        whatsappConfig: {
-          ...wc,
-          apiUrl: waForm.apiUrl || 'https://graph.facebook.com/v25.0',
-          phoneNumberId: waForm.phoneNumberId,
-          accessToken: waForm.accessToken,
-          verifyToken: waForm.verifyToken,
-          tokenSource: 'manual',
+        name: profile.name.trim(),
+        phone: profile.phone.trim() || undefined,
+        address: profile.address.trim() || undefined,
+        slotDuration: parseInt(profile.slotDuration, 10),
+        workingHours: {
+          start: profile.workingHoursStart,
+          end: profile.workingHoursEnd,
         },
       });
       setSelectedClinic(res.data.data);
-      toast.success('WhatsApp configuration saved');
+      setEditing(false);
+      toast.success('Clinic profile updated');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to save WhatsApp config');
+      toast.error(err.response?.data?.error || 'Failed to update profile');
     } finally {
-      setSavingWA(false);
+      setSavingProfile(false);
     }
   }
 
   return (
     <Layout title="Settings">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Clinic configuration & integrations.
-        </p>
-      </div>
-
       <div className="grid max-w-4xl gap-4">
         <Card>
-          <CardHeader className="border-b">
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="size-4 text-primary" />
-              Clinic profile
-            </CardTitle>
-            <CardDescription>Basic information about your clinic.</CardDescription>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="size-4 text-primary" />
+                Clinic profile
+              </CardTitle>
+              <CardDescription>
+                Basic information and operating hours for your clinic.
+              </CardDescription>
+            </div>
+            {!loading && selectedClinic && !editing ? (
+              <Button variant="outline" size="sm" onClick={startEdit}>
+                <Pencil className="size-3.5" /> Edit
+              </Button>
+            ) : null}
           </CardHeader>
+
           <CardContent className="pt-6">
-            {selectedClinic ? (
-              <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                <InfoItem label="Name">{selectedClinic.name}</InfoItem>
-                <InfoItem label="Phone">{selectedClinic.phone}</InfoItem>
-                <InfoItem label="Working hours">
-                  {selectedClinic.workingHours?.start} – {selectedClinic.workingHours?.end}
-                </InfoItem>
-                <InfoItem label="Slot duration">
-                  {selectedClinic.slotDuration} minutes
-                </InfoItem>
-                <InfoItem label="Address">{selectedClinic.address || '—'}</InfoItem>
-                <InfoItem label="Status">
-                  <Badge variant="success" className="font-normal">
-                    Active
-                  </Badge>
-                </InfoItem>
-              </dl>
-            ) : (
-              <div className="flex flex-col items-center gap-3 py-8 text-center text-muted-foreground">
-                <Building2 className="size-6" />
+            {loading ? (
+              <ProfileSkeleton />
+            ) : !selectedClinic ? (
+              <div className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
+                <div className="flex size-12 items-center justify-center rounded-full bg-muted">
+                  <Building2 className="size-5" />
+                </div>
                 <p className="text-sm">No clinic selected</p>
               </div>
+            ) : editing ? (
+              <ProfileForm
+                value={profile}
+                onChange={setProfile}
+                onSubmit={handleSaveProfile}
+                onCancel={cancelEdit}
+                saving={savingProfile}
+              />
+            ) : (
+              <ProfileView clinic={selectedClinic} />
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-end justify-between border-b">
-            <div>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
+            <div className="space-y-1">
               <CardTitle className="flex items-center gap-2">
                 <MessageSquare className="size-4 text-[#25D366]" />
-                WhatsApp Cloud API
+                WhatsApp
               </CardTitle>
               <CardDescription>
-                Configure WhatsApp Business API credentials for the chatbot.
+                Connect a WhatsApp number to send and receive messages.
               </CardDescription>
             </div>
             {waConfigured ? (
               <Badge variant="success" className="font-normal">
-                <CheckCircle2 className="size-3" /> Configured
+                <CheckCircle2 className="size-3" /> Connected
               </Badge>
             ) : (
               <Badge variant="warning" className="font-normal">
-                <AlertCircle className="size-3" /> Not configured
+                <AlertCircle className="size-3" /> Not connected
               </Badge>
             )}
           </CardHeader>
+
           <CardContent className="pt-6">
-            {waConfigured ? (
+            {loading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : waConfigured ? (
               <ConnectedPanel
                 wc={wc}
-                connectedViaSignup={connectedViaSignup}
                 onDisconnect={handleDisconnect}
                 disconnecting={disconnectingWA}
               />
@@ -300,172 +318,131 @@ export default function Settings() {
                 hasConfigId={!!FB_CONFIG_ID}
               />
             )}
-
-            <details className="mt-6 rounded-md border bg-muted/20">
-              <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
-                <span className="inline-flex items-center gap-2">
-                  <SettingsIcon className="size-3.5" />
-                  Advanced: enter credentials manually
-                </span>
-                <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="border-t px-4 py-5">
-                <div className="mb-4 flex items-start gap-2 rounded-md border bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
-                  <Info className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-                  <p>
-                    Use this only for self-managed test numbers. Production
-                    clinics should use the Connect WhatsApp button above —
-                    Meta's flow handles OTP verification, business naming and
-                    long-lived token issuance automatically.
-                  </p>
-                </div>
-                <a
-                  href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mb-4 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                >
-                  View Meta setup guide <ExternalLink className="size-3" />
-                </a>
-
-                <form onSubmit={handleSaveWhatsApp} className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="wa-url">API URL</Label>
-                <Input
-                  id="wa-url"
-                  value={waForm.apiUrl}
-                  onChange={(e) => setWaForm({ ...waForm, apiUrl: e.target.value })}
-                  placeholder="https://graph.facebook.com/v25.0"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Default: <code className="rounded bg-muted px-1 py-0.5 text-[11px]">https://graph.facebook.com/v25.0</code>
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="wa-phone">
-                  Phone Number ID <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="wa-phone"
-                  value={waForm.phoneNumberId}
-                  onChange={(e) =>
-                    setWaForm({ ...waForm, phoneNumberId: e.target.value })
-                  }
-                  placeholder="e.g. 971751466032870"
-                  required
-                />
-                <p className="text-xs text-muted-foreground">
-                  Found in Meta Developer Dashboard → WhatsApp → API Setup.
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="wa-token">
-                  Access Token <span className="text-destructive">*</span>
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="wa-token"
-                    type={showAccessToken ? 'text' : 'password'}
-                    value={waForm.accessToken}
-                    onChange={(e) =>
-                      setWaForm({ ...waForm, accessToken: e.target.value })
-                    }
-                    placeholder="Paste your permanent access token"
-                    required
-                    className="pr-10 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowAccessToken((s) => !s)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    tabIndex={-1}
-                    aria-label={showAccessToken ? 'Hide token' : 'Show token'}
-                  >
-                    {showAccessToken ? (
-                      <EyeOff className="size-4" />
-                    ) : (
-                      <Eye className="size-4" />
-                    )}
-                  </button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Generate a permanent token from System Users in Meta Business Settings.
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="wa-verify">Verify Token</Label>
-                <Input
-                  id="wa-verify"
-                  value={waForm.verifyToken}
-                  onChange={(e) =>
-                    setWaForm({ ...waForm, verifyToken: e.target.value })
-                  }
-                  placeholder="e.g. my_custom_verify_token"
-                />
-                <p className="text-xs text-muted-foreground">
-                  A custom string set in the Meta webhook for verification.
-                </p>
-              </div>
-
-              <div className="flex justify-end">
-                <Button type="submit" disabled={savingWA}>
-                  {savingWA ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Save className="size-4" />
-                  )}
-                  {savingWA ? 'Saving…' : 'Save WhatsApp config'}
-                </Button>
-              </div>
-                </form>
-              </div>
-            </details>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="border-b">
-            <CardTitle className="flex items-center gap-2">
-              <SettingsIcon className="size-4 text-primary" />
-              API configuration
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-6 space-y-4">
-            <div className="space-y-1.5">
-              <Label>Backend API URL</Label>
-              <Input defaultValue="http://localhost:3000" disabled />
-            </div>
-            <div className="space-y-1.5">
-              <Label>WhatsApp bot status</Label>
-              <div className="flex flex-wrap items-center gap-2">
-                {waConfigured ? (
-                  <>
-                    <Badge variant="success" className="font-normal">
-                      Connected
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      via Meta Cloud API
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <Badge variant="warning" className="font-normal">
-                      Not connected
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      Configure above to connect
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
           </CardContent>
         </Card>
       </div>
     </Layout>
+  );
+}
+
+// ── Clinic profile sub-components ─────────────────────────
+
+function ProfileView({ clinic }) {
+  return (
+    <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+      <InfoItem label="Name">{clinic.name}</InfoItem>
+      <InfoItem label="Phone">
+        {clinic.phone || <Muted>Not set</Muted>}
+      </InfoItem>
+      <InfoItem label="Working hours">
+        {clinic.workingHours?.start} – {clinic.workingHours?.end}
+      </InfoItem>
+      <InfoItem label="Slot duration">{clinic.slotDuration} minutes</InfoItem>
+      <InfoItem label="Address">
+        {clinic.address || <Muted>Not set</Muted>}
+      </InfoItem>
+      <InfoItem label="Status">
+        <Badge variant="success" className="font-normal">
+          Active
+        </Badge>
+      </InfoItem>
+    </dl>
+  );
+}
+
+function ProfileForm({ value, onChange, onSubmit, onCancel, saving }) {
+  function update(patch) {
+    onChange((prev) => ({ ...prev, ...patch }));
+  }
+  return (
+    <form onSubmit={onSubmit} className="space-y-5">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="c-name">Clinic name *</Label>
+          <Input
+            id="c-name"
+            required
+            value={value.name}
+            onChange={(e) => update({ name: e.target.value })}
+            placeholder="e.g. Bright Smile Dental"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="c-phone">Phone</Label>
+          <Input
+            id="c-phone"
+            value={value.phone}
+            onChange={(e) => update({ phone: e.target.value })}
+            placeholder="e.g. 15551234567"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="c-slot">Slot duration</Label>
+          <select
+            id="c-slot"
+            value={value.slotDuration}
+            onChange={(e) => update({ slotDuration: e.target.value })}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            {SLOT_DURATION_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m} minutes
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="c-start">Working hours start</Label>
+          <Input
+            id="c-start"
+            type="time"
+            value={value.workingHoursStart}
+            onChange={(e) => update({ workingHoursStart: e.target.value })}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="c-end">Working hours end</Label>
+          <Input
+            id="c-end"
+            type="time"
+            value={value.workingHoursEnd}
+            onChange={(e) => update({ workingHoursEnd: e.target.value })}
+          />
+        </div>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="c-address">Address</Label>
+          <Input
+            id="c-address"
+            value={value.address}
+            onChange={(e) => update({ address: e.target.value })}
+            placeholder="Street, city, postal code"
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+          {saving ? 'Saving…' : 'Save changes'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function ProfileSkeleton() {
+  return (
+    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="space-y-2">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -480,6 +457,12 @@ function InfoItem({ label, children }) {
   );
 }
 
+function Muted({ children }) {
+  return <span className="text-muted-foreground font-normal">{children}</span>;
+}
+
+// ── WhatsApp sub-components ───────────────────────────────
+
 function NotConnectedPanel({
   onConnect,
   connecting,
@@ -488,124 +471,57 @@ function NotConnectedPanel({
   hasConfigId,
 }) {
   return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-2.5 rounded-md border bg-primary/5 px-4 py-3 text-sm">
-        <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-        <div className="space-y-1.5 text-muted-foreground">
-          <p>
-            Connect your clinic's WhatsApp number in one click. Meta will guide
-            you through verifying the number, naming your business, and granting
-            Slotlii permission to send messages on your behalf. No tokens to
-            copy and paste.
-          </p>
-          <a
-            href="https://developers.facebook.com/docs/whatsapp/embedded-signup"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-          >
-            How Embedded Signup works <ExternalLink className="size-3" />
-          </a>
-        </div>
+    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full bg-[#25D366]/10">
+        <MessageSquare className="size-6 text-[#25D366]" />
       </div>
-
-      <div className="flex flex-col items-center gap-3 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
-        <div className="flex size-12 items-center justify-center rounded-full bg-[#25D366]/10">
-          <MessageSquare className="size-6 text-[#25D366]" />
-        </div>
-        <div className="space-y-1">
-          <p className="text-sm font-semibold">No WhatsApp number connected</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            Click below to launch Meta's secure onboarding popup. You will need
-            access to the phone number you want to register (for OTP).
-          </p>
-        </div>
-        <Button
-          onClick={onConnect}
-          disabled={connecting || !fbReady || !hasConfigId}
-          className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
-        >
-          {connecting ? (
-            <>
-              <Loader2 className="size-4 animate-spin" /> Finishing setup…
-            </>
-          ) : (
-            <>
-              <MessageSquare className="size-4" /> Connect WhatsApp
-            </>
-          )}
-        </Button>
-        {!hasConfigId && (
-          <p className="text-[11px] text-destructive">
-            VITE_FACEBOOK_CONFIG_ID is missing. Add it to .env to enable this
-            button.
-          </p>
-        )}
-        {hasConfigId && !fbReady && !fbError && (
-          <p className="text-[11px] text-muted-foreground">
-            Loading Meta SDK…
-          </p>
-        )}
-        {fbError && (
-          <p className="text-[11px] text-destructive">{fbError.message}</p>
-        )}
+      <div className="space-y-1">
+        <p className="text-sm font-semibold">No WhatsApp number connected</p>
+        <p className="max-w-sm text-xs text-muted-foreground">
+          Connect through Meta's secure flow — you'll need access to the phone
+          number you want to register for OTP.
+        </p>
       </div>
+      <Button
+        onClick={onConnect}
+        disabled={connecting || !fbReady || !hasConfigId}
+        className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
+      >
+        {connecting ? (
+          <>
+            <Loader2 className="size-4 animate-spin" /> Finishing setup…
+          </>
+        ) : (
+          <>
+            <MessageSquare className="size-4" /> Connect WhatsApp
+          </>
+        )}
+      </Button>
+      {!hasConfigId && (
+        <p className="text-[11px] text-destructive">
+          VITE_FACEBOOK_CONFIG_ID is missing. Add it to .env to enable this
+          button.
+        </p>
+      )}
+      {hasConfigId && !fbReady && !fbError && (
+        <p className="text-[11px] text-muted-foreground">Loading Meta SDK…</p>
+      )}
+      {fbError && (
+        <p className="text-[11px] text-destructive">{fbError.message}</p>
+      )}
     </div>
   );
 }
 
-function ConnectedPanel({ wc, connectedViaSignup, onDisconnect, disconnecting }) {
+function ConnectedPanel({ wc, onDisconnect, disconnecting }) {
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-2.5 rounded-md border bg-emerald-500/5 px-4 py-3 text-sm">
-        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-        <div className="space-y-1 text-muted-foreground">
-          <p className="font-medium text-foreground">
-            WhatsApp is connected and ready to receive messages.
-          </p>
-          <p className="text-xs">
-            {connectedViaSignup
-              ? 'Onboarded via Meta Embedded Signup. Tokens are managed automatically.'
-              : 'Configured manually. Switch to Embedded Signup for managed tokens.'}
-          </p>
-        </div>
-      </div>
-
       <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
         <InfoItem label="Business name">
-          {wc.verifiedName || <span className="text-muted-foreground">—</span>}
+          {wc.verifiedName || <Muted>Not set</Muted>}
         </InfoItem>
         <InfoItem label="Phone number">
-          {wc.displayPhoneNumber || (
-            <span className="text-muted-foreground">—</span>
-          )}
-        </InfoItem>
-        <InfoItem label="Phone number ID">
-          <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px]">
-            {wc.phoneNumberId}
-          </code>
-        </InfoItem>
-        <InfoItem label="WABA ID">
-          {wc.wabaId ? (
-            <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px]">
-              {wc.wabaId}
-            </code>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          )}
-        </InfoItem>
-        {wc.connectedAt && (
-          <InfoItem label="Connected">
-            {new Date(wc.connectedAt).toLocaleString()}
-          </InfoItem>
-        )}
-        <InfoItem label="Source">
-          <Badge
-            variant={connectedViaSignup ? 'success' : 'warning'}
-            className="font-normal"
-          >
-            {connectedViaSignup ? 'Embedded Signup' : 'Manual'}
-          </Badge>
+          {wc.displayPhoneNumber || <Muted>Not set</Muted>}
         </InfoItem>
       </dl>
 
@@ -621,7 +537,7 @@ function ConnectedPanel({ wc, connectedViaSignup, onDisconnect, disconnecting })
           ) : (
             <Link2Off className="size-4" />
           )}
-          {disconnecting ? 'Disconnecting…' : 'Disconnect WhatsApp'}
+          {disconnecting ? 'Disconnecting…' : 'Disconnect'}
         </Button>
       </div>
     </div>

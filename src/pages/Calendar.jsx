@@ -440,6 +440,13 @@ export default function CalendarPage() {
                       )}
                       onClick={() => setAppointmentPopup(apt)}
                     >
+                      {apt.tokenNumber ? (
+                        <span className="w-9 shrink-0 text-center text-xs font-semibold tabular-nums text-muted-foreground">
+                          #{apt.tokenNumber}
+                        </span>
+                      ) : (
+                        <span className="w-9 shrink-0" />
+                      )}
                       <span className="w-16 shrink-0 text-sm font-bold tabular-nums">
                         {apt.time}
                       </span>
@@ -477,6 +484,14 @@ export default function CalendarPage() {
           </DialogHeader>
           {appointmentPopup ? (
             <div className="grid grid-cols-[88px_1fr] gap-y-2 text-sm">
+              {appointmentPopup.tokenNumber ? (
+                <>
+                  <span className="text-muted-foreground">Token</span>
+                  <span className="font-semibold tabular-nums">
+                    #{appointmentPopup.tokenNumber}
+                  </span>
+                </>
+              ) : null}
               <span className="text-muted-foreground">Patient</span>
               <span className="font-medium">{appointmentPopup.patientId?.name || '—'}</span>
               {appointmentPopup.doctorId?.name ? (

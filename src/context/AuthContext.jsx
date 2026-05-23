@@ -28,9 +28,20 @@ export function AuthProvider({ children }) {
     }
   }
 
-  async function login(username, password) {
-    const res = await api.loginClient(username, password);
+  async function login(email, password) {
+    const res = await api.loginClient(email, password);
     const { token, user: userData } = res.data.data;
+    localStorage.setItem('slotlii_client_token', token);
+    setUser(userData);
+    return userData;
+  }
+
+  /**
+   * Used by both signup verification (`/verify-email`) and admin-invite
+   * password setup (`/set-password`) — both endpoints respond with a JWT,
+   * so we just persist it and hydrate the user.
+   */
+  function applyAuthPayload({ token, user: userData }) {
     localStorage.setItem('slotlii_client_token', token);
     setUser(userData);
     return userData;
@@ -49,6 +60,7 @@ export function AuthProvider({ children }) {
         isAuthenticated: !!user,
         login,
         logout,
+        applyAuthPayload,
       }}
     >
       {children}

@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Clock,
   Gift,
+  MessageSquare,
   Pill,
   Plus,
   Stethoscope,
@@ -163,7 +164,9 @@ export default function Dashboard() {
       label: "Today's appointments",
       value: today?.total ?? 0,
       hint: next
-        ? `Next at ${next.time} · ${next.patientId?.name || 'Patient'}`
+        ? `Next ${next.tokenNumber ? `#${next.tokenNumber} ` : ''}at ${next.time} · ${
+            next.patientId?.name || 'Patient'
+          }`
         : 'No upcoming appointments',
       icon: CalendarCheck,
       tint: 'primary',
@@ -220,6 +223,8 @@ export default function Dashboard() {
           </Button>
         </div>
       </div>
+
+      <WhatsAppSetupBanner clinic={selectedClinic} onClick={() => navigate('/settings')} />
 
       {/* ── KPI cards ──────────────────────────────────────── */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -294,6 +299,7 @@ export default function Dashboard() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[60px]">Token</TableHead>
                     <TableHead className="w-[80px]">Time</TableHead>
                     <TableHead>Patient</TableHead>
                     <TableHead>Doctor</TableHead>
@@ -304,6 +310,9 @@ export default function Dashboard() {
                 <TableBody>
                   {schedule.slice(0, 8).map((apt) => (
                     <TableRow key={apt._id}>
+                      <TableCell className="font-semibold tabular-nums text-muted-foreground">
+                        {apt.tokenNumber ? `#${apt.tokenNumber}` : '—'}
+                      </TableCell>
                       <TableCell className="font-medium tabular-nums">
                         {apt.time}
                       </TableCell>
@@ -673,6 +682,36 @@ export default function Dashboard() {
 }
 
 // ── Helpers ──────────────────────────────────────────────
+
+// Soft "finish setup" reminder shown until WhatsApp is connected. Onboarding
+// itself doesn't ask for WhatsApp (it requires Meta business approval and
+// can't be rushed), so we surface the prompt here instead — clicking it
+// drops the user straight onto the Settings page where the Embedded Signup
+// flow lives.
+function WhatsAppSetupBanner({ clinic, onClick }) {
+  if (!clinic) return null;
+  if (clinic.whatsappConfig?.phoneNumberId) return null;
+
+  return (
+    <div className="mb-6 flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-start gap-3 sm:items-center">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <MessageSquare className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium">Finish setup: connect WhatsApp</p>
+          <p className="text-xs text-muted-foreground">
+            Send appointment confirmations and reminders directly from your
+            verified WhatsApp business number.
+          </p>
+        </div>
+      </div>
+      <Button size="sm" onClick={onClick}>
+        Connect WhatsApp <ArrowRight className="size-4" />
+      </Button>
+    </div>
+  );
+}
 
 function EmptyState({ icon: Icon, title, hint }) {
   return (

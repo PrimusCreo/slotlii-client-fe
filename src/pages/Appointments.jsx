@@ -328,6 +328,7 @@ export default function Appointments() {
               <SelectContent>
                 <SelectItem value="date_desc">Date (newest first)</SelectItem>
                 <SelectItem value="date_asc">Date (oldest first)</SelectItem>
+                <SelectItem value="token_asc">Token (asc)</SelectItem>
                 <SelectItem value="name_asc">Name (A → Z)</SelectItem>
                 <SelectItem value="name_desc">Name (Z → A)</SelectItem>
               </SelectContent>
@@ -358,6 +359,7 @@ export default function Appointments() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[64px]">Token</TableHead>
                   <TableHead>Patient</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Doctor</TableHead>
@@ -371,6 +373,9 @@ export default function Appointments() {
               <TableBody>
                 {appointments.map((apt) => (
                   <TableRow key={apt._id}>
+                    <TableCell className="font-semibold tabular-nums text-muted-foreground">
+                      {apt.tokenNumber ? `#${apt.tokenNumber}` : '—'}
+                    </TableCell>
                     <TableCell className="font-medium">
                       {apt.patientId?.name || 'N/A'}
                     </TableCell>

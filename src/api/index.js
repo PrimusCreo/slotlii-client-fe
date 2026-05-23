@@ -34,14 +34,25 @@ api.interceptors.response.use(
 );
 
 // ── Auth ────────────────────────────────────────────────
-export const loginClient = (username, password) =>
-  api.post('/auth/login', { username, password, role: 'client' });
+export const loginClient = (email, password) =>
+  api.post('/auth/login', { email, password, role: 'client' });
+export const signup = (email, password) =>
+  api.post('/auth/signup', { email, password });
+export const verifyEmail = (token) =>
+  api.post('/auth/verify-email', { token });
+export const setPassword = (token, password) =>
+  api.post('/auth/set-password', { token, password });
+export const getInvite = (token) => api.get(`/auth/invite/${token}`);
+export const resendVerification = (email) =>
+  api.post('/auth/resend-verification', { email });
 export const getMe = () => api.get('/auth/me');
 
 // ── Clinics ─────────────────────────────────────────────
 export const getClinics = () => api.get('/clinics');
 export const getClinic = (id) => api.get(`/clinics/${id}`);
 export const updateClinic = (id, data) => api.put(`/clinics/${id}`, data);
+export const completeOnboarding = (id) =>
+  api.post(`/clinics/${id}/onboarding-complete`);
 export const connectWhatsAppEmbeddedSignup = (id, payload) =>
   api.post(`/clinics/${id}/whatsapp/embedded-signup`, payload);
 export const disconnectWhatsApp = (id) =>

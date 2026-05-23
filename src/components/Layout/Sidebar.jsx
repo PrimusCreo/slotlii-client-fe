@@ -10,13 +10,13 @@ import {
   Plus,
   LogOut,
   MessageSquarePlus,
-  HeartPulse,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../../context/AuthContext';
 import { useClinic } from '../../context/ClinicContext';
 import * as api from '../../api';
+import darkLogo from '../../assets/dark-logo.png';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -90,8 +90,9 @@ export default function Sidebar() {
     }
   }
 
-  const initials = (selectedClinic?.name || user?.username || '??')
-    .split(' ')
+  const initials = (selectedClinic?.name || user?.email || '??')
+    .split(/[\s@.]+/)
+    .filter(Boolean)
     .map((s) => s.charAt(0))
     .slice(0, 2)
     .join('')
@@ -101,9 +102,11 @@ export default function Sidebar() {
     <>
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r bg-sidebar text-sidebar-foreground">
         <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-            <HeartPulse className="size-5" />
-          </div>
+          <img
+            src={darkLogo}
+            alt="Slotlii"
+            className="size-9 shrink-0 rounded-lg shadow-sm"
+          />
           <div className="leading-tight">
             <div className="text-base font-bold tracking-tight">Slotlii</div>
             <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -153,7 +156,7 @@ export default function Sidebar() {
                 {selectedClinic?.name || 'Clinic'}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
-                {user?.username || 'Staff member'}
+                {user?.email || 'Staff member'}
               </div>
             </div>
           </div>
