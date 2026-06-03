@@ -35,7 +35,6 @@ import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
 import { PrescriptionDocument } from '@/components/prescriptions/PrescriptionDocument';
 import { MedicineNameInput } from '@/components/prescriptions/MedicineNameInput';
-import { generatePrescriptionPdf } from '@/lib/generatePrescriptionPdf';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -572,6 +571,7 @@ export default function PatientDetail() {
             d._id === entry.doctorId ||
             (d.name && d.name === entry.doctor),
         );
+        const { generatePrescriptionPdf } = await import('@/lib/generatePrescriptionPdf');
         file = await generatePrescriptionPdf({
           prescription: entry,
           patient,
