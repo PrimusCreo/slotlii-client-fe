@@ -84,18 +84,8 @@ export const updatePatientMedicalHistory = (id, entryId, data) =>
   api.patch(`/patients/${id}/medical-history/${entryId}`, data);
 export const deletePatientMedicalHistory = (id, entryId) =>
   api.delete(`/patients/${id}/medical-history/${entryId}`);
-export const shareMedicalHistoryViaWhatsApp = (patientId, entryId, file) => {
-  if (file) {
-    const form = new FormData();
-    form.append('file', file, file.name || 'prescription.pdf');
-    return api.post(
-      `/patients/${patientId}/medical-history/${entryId}/share-whatsapp`,
-      form,
-      { headers: { 'Content-Type': 'multipart/form-data' } },
-    );
-  }
-  return api.post(`/patients/${patientId}/medical-history/${entryId}/share-whatsapp`);
-};
+export const shareMedicalHistoryViaWhatsApp = (patientId, entryId) =>
+  api.post(`/patients/${patientId}/medical-history/${entryId}/share-whatsapp`);
 
 // ── Doctors ─────────────────────────────────────────────
 export const getDoctors = (params) => api.get('/doctors', { params });

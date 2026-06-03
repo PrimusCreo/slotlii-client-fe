@@ -564,22 +564,7 @@ export default function PatientDetail() {
     }
     setSharingEntryId(entry._id);
     try {
-      let file;
-      if (entry.type === 'prescription') {
-        const doctor = doctors.find(
-          (d) =>
-            d._id === entry.doctorId ||
-            (d.name && d.name === entry.doctor),
-        );
-        const { generatePrescriptionPdf } = await import('@/lib/generatePrescriptionPdf');
-        file = await generatePrescriptionPdf({
-          prescription: entry,
-          patient,
-          clinic: selectedClinic,
-          doctor: doctor || null,
-        });
-      }
-      const res = await api.shareMedicalHistoryViaWhatsApp(id, entry._id, file);
+      const res = await api.shareMedicalHistoryViaWhatsApp(id, entry._id);
       const to = res.data?.data?.to || patient.phone;
       toast.success(`Sent to ${to} on WhatsApp`);
     } catch (err) {
