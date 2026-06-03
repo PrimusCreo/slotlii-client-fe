@@ -198,11 +198,11 @@ export default function Patients() {
                           </AvatarFallback>
                         </Avatar>
                         <span>{p.name}</span>
-                        {p._samePhoneCount > 1 ? (
+                        {/* {p._samePhoneCount > 1 ? (
                           <Badge variant="info" className="font-normal">
                             Same line ({p._samePhoneCount})
                           </Badge>
-                        ) : null}
+                        ) : null} */}
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">

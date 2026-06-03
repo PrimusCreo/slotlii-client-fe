@@ -84,6 +84,18 @@ export const updatePatientMedicalHistory = (id, entryId, data) =>
   api.patch(`/patients/${id}/medical-history/${entryId}`, data);
 export const deletePatientMedicalHistory = (id, entryId) =>
   api.delete(`/patients/${id}/medical-history/${entryId}`);
+export const shareMedicalHistoryViaWhatsApp = (patientId, entryId, file) => {
+  if (file) {
+    const form = new FormData();
+    form.append('file', file, file.name || 'prescription.pdf');
+    return api.post(
+      `/patients/${patientId}/medical-history/${entryId}/share-whatsapp`,
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+  }
+  return api.post(`/patients/${patientId}/medical-history/${entryId}/share-whatsapp`);
+};
 
 // ── Doctors ─────────────────────────────────────────────
 export const getDoctors = (params) => api.get('/doctors', { params });
@@ -99,5 +111,9 @@ export const submitFeedback = (data) => api.post('/feedback', data);
 // ── Stats ───────────────────────────────────────────────
 export const getDashboardStats = (params) =>
   api.get('/stats/dashboard', { params });
+
+// ── Medicines (autocomplete) ────────────────────────────
+export const searchMedicines = (q, limit = 10, opts = {}) =>
+  api.get('/medicines/autocomplete', { params: { q, limit }, ...opts });
 
 export default api;

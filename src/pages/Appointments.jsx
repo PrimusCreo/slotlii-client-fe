@@ -3,14 +3,18 @@ import { Link } from 'react-router-dom';
 import {
   CalendarCheck,
   CalendarX,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Loader2,
+  MoreHorizontal,
   Plus,
   Search,
+  UserX,
   X,
+  XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -45,8 +49,27 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/common/status-badge';
+import { AppointmentDetailsDialog } from '@/components/appointments/AppointmentDetailsDialog';
+
+function formatDateDMY(value) {
+  if (!value) return '—';
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if (match) return `${match[3]}-${match[2]}-${match[1]}`;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}-${mm}-${d.getFullYear()}`;
+}
 
 export default function Appointments() {
   const { selectedClinicId } = useClinic();
@@ -68,6 +91,7 @@ export default function Appointments() {
     open: false,
     appointment: null,
   });
+  const [detailsAppointment, setDetailsAppointment] = useState(null);
   const [rescheduleForm, setRescheduleForm] = useState({
     date: '',
     time: '',
@@ -372,7 +396,11 @@ export default function Appointments() {
               </TableHeader>
               <TableBody>
                 {appointments.map((apt) => (
-                  <TableRow key={apt._id}>
+                  <TableRow
+                    key={apt._id}
+                    onClick={() => setDetailsAppointment(apt)}
+                    className="cursor-pointer hover:bg-accent/40"
+                  >
                     <TableCell className="font-semibold tabular-nums text-muted-foreground">
                       {apt.tokenNumber ? `#${apt.tokenNumber}` : '—'}
                     </TableCell>
@@ -386,7 +414,7 @@ export default function Appointments() {
                       {apt.doctorId?.name || '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
-                      {apt.date}
+                      {formatDateDMY(apt.date)}
                     </TableCell>
                     <TableCell className="font-medium tabular-nums">{apt.time}</TableCell>
                     <TableCell className="max-w-[220px] truncate text-muted-foreground">
@@ -395,42 +423,52 @@ export default function Appointments() {
                     <TableCell>
                       <StatusBadge status={apt.status} />
                     </TableCell>
-                    <TableCell className="text-right">
-                      {apt.status === 'BOOKED' ? (
-                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <TableCell
+                      className="text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* {apt.status === 'BOOKED' ? ( */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                           <Button
-                            size="sm"
-                            variant="soft"
-                            onClick={() => handleAction(apt._id, 'COMPLETED')}
+                            variant="ghost"
+                            size="icon-sm"
+                            className="ml-auto data-[state=open]:bg-accent"
+                            aria-label="Open actions"
                           >
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem
+                            onSelect={() => handleAction(apt._id, 'COMPLETED')}
+                          >
+                            <CheckCircle2 className="text-muted-foreground" />
                             Complete
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openReschedule(apt)}
-                          >
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => openReschedule(apt)}>
+                            <CalendarCheck className="text-muted-foreground" />
                             Reschedule
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleAction(apt._id, 'NO_SHOW')}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => handleAction(apt._id, 'NO_SHOW')}
                           >
+                            <UserX className="text-muted-foreground" />
                             No show
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => handleAction(apt._id, 'cancel')}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => handleAction(apt._id, 'cancel')}
+                            className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                           >
+                            <XCircle className="text-destructive" />
                             Cancel
-                          </Button>
-                        </div>
-                      ) : (
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      {/* ) : (
                         <span className="text-xs text-muted-foreground">—</span>
-                      )}
+                      )} */}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -597,6 +635,11 @@ export default function Appointments() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AppointmentDetailsDialog
+        appointment={detailsAppointment}
+        onClose={() => setDetailsAppointment(null)}
+      />
     </Layout>
   );
 }

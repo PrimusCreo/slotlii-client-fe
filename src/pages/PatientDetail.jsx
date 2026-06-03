@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -20,6 +21,7 @@ import {
   Phone,
   Pill,
   Plus,
+  Printer,
   Search,
   Share2,
   Stethoscope,
@@ -30,6 +32,10 @@ import {
 import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
+import { useClinic } from '../context/ClinicContext';
+import { PrescriptionDocument } from '@/components/prescriptions/PrescriptionDocument';
+import { MedicineNameInput } from '@/components/prescriptions/MedicineNameInput';
+import { generatePrescriptionPdf } from '@/lib/generatePrescriptionPdf';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -194,6 +200,7 @@ const initialForm = {
 export default function PatientDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { selectedClinic } = useClinic();
 
   const [patient, setPatient] = useState(null);
   const [appointments, setAppointments] = useState([]);
@@ -235,6 +242,7 @@ export default function PatientDetail() {
   });
   const [savingEditPrescription, setSavingEditPrescription] = useState(false);
   const [deletingPrescriptionId, setDeletingPrescriptionId] = useState(null);
+  const [sharingEntryId, setSharingEntryId] = useState(null);
 
   useEffect(() => {
     loadPatientData();
@@ -467,30 +475,6 @@ export default function PatientDetail() {
     }
   }
 
-  async function shareReport(report) {
-    const links = (report.attachments || [])
-      .map((a) => a.publicUrl)
-      .filter(Boolean);
-    if (links.length === 0) {
-      toast.error('No file links available to share');
-      return;
-    }
-    const text =
-      links.length === 1
-        ? links[0]
-        : `${report.condition || 'Report'}\n${links.join('\n')}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(
-        links.length === 1
-          ? 'Report link copied — paste it in your chat with the patient'
-          : `${links.length} links copied — paste them in your chat with the patient`,
-      );
-    } catch {
-      toast.error('Could not copy link to clipboard');
-    }
-  }
-
   async function deleteReport(report) {
     if (
       !window.confirm(
@@ -524,12 +508,12 @@ export default function PatientDetail() {
       medications:
         rx.medications && rx.medications.length > 0
           ? rx.medications.map((m) => ({
-              name: m.name || '',
-              dosage: m.dosage || '',
-              duration: m.duration || '',
-              frequency: m.frequency || '',
-              instructions: m.instructions || '',
-            }))
+            name: m.name || '',
+            dosage: m.dosage || '',
+            duration: m.duration || '',
+            frequency: m.frequency || '',
+            instructions: m.instructions || '',
+          }))
           : [emptyMedication()],
     });
     setEditingPrescription(rx);
@@ -574,25 +558,34 @@ export default function PatientDetail() {
     }
   }
 
-  async function sharePrescription(rx) {
-    const lines = [];
-    lines.push(`Prescription — ${rx.condition || 'Diagnosis'}`);
-    if (rx.doctor) lines.push(`Doctor: ${rx.doctor}`);
-    if (rx.date) lines.push(`Date: ${formatDate(rx.date)}`);
-    lines.push('');
-    (rx.medications || []).forEach((m, i) => {
-      const segs = [m.name];
-      if (m.dosage) segs.push(m.dosage);
-      if (m.frequency) segs.push(m.frequency);
-      if (m.duration) segs.push(m.duration);
-      lines.push(`${i + 1}. ${segs.join(' · ')}`);
-      if (m.instructions) lines.push(`   ${m.instructions}`);
-    });
+  async function shareWithPatientViaWhatsApp(entry) {
+    if (!patient?.phone) {
+      toast.error('Patient has no phone number on file');
+      return;
+    }
+    setSharingEntryId(entry._id);
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      toast.success('Prescription copied — paste it in your chat with the patient');
-    } catch {
-      toast.error('Could not copy to clipboard');
+      let file;
+      if (entry.type === 'prescription') {
+        const doctor = doctors.find(
+          (d) =>
+            d._id === entry.doctorId ||
+            (d.name && d.name === entry.doctor),
+        );
+        file = await generatePrescriptionPdf({
+          prescription: entry,
+          patient,
+          clinic: selectedClinic,
+          doctor: doctor || null,
+        });
+      }
+      const res = await api.shareMedicalHistoryViaWhatsApp(id, entry._id, file);
+      const to = res.data?.data?.to || patient.phone;
+      toast.success(`Sent to ${to} on WhatsApp`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || err.message || 'Failed to send via WhatsApp');
+    } finally {
+      setSharingEntryId(null);
     }
   }
 
@@ -638,10 +631,7 @@ export default function PatientDetail() {
         date: a.date,
         time: a.time,
         type: 'appointment',
-        title:
-          a.status === 'cancelled'
-            ? 'Appointment Cancelled'
-            : `Appointment — ${a.issue || 'Visit'}`,
+        title: a.status === 'cancelled' ? 'Appointment Cancelled' : 'Appointment',
         subtitle: a.doctorName ? `Doctor: ${a.doctorName}` : null,
         description: a.issue,
         status: a.status,
@@ -900,9 +890,10 @@ export default function PatientDetail() {
               onAdd={() => openAddModal('prescription')}
               onView={openViewPrescription}
               onEdit={openEditPrescription}
-              onShare={sharePrescription}
+              onShare={shareWithPatientViaWhatsApp}
               onDelete={deletePrescription}
               deletingPrescriptionId={deletingPrescriptionId}
+              sharingEntryId={sharingEntryId}
             />
           </TabsContent>
 
@@ -913,9 +904,10 @@ export default function PatientDetail() {
               onAdd={() => openAddModal('report')}
               onView={openViewReport}
               onEdit={openEditReport}
-              onShare={shareReport}
+              onShare={shareWithPatientViaWhatsApp}
               onDelete={deleteReport}
               deletingReportId={deletingReportId}
+              sharingEntryId={sharingEntryId}
             />
           </TabsContent>
         </Tabs>
@@ -948,44 +940,35 @@ export default function PatientDetail() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="r-doc">Doctor</Label>
-                {modalType === 'report' || modalType === 'prescription' ? (
-                  <Select
-                    value={form.doctorId || undefined}
-                    onValueChange={(v) => {
-                      const picked = doctors.find((d) => d._id === v);
-                      setForm({
-                        ...form,
-                        doctorId: v,
-                        doctor: picked?.name || '',
-                      });
-                    }}
-                  >
-                    <SelectTrigger id="r-doc">
-                      <SelectValue
-                        placeholder={
-                          doctors.length === 0
-                            ? 'No doctors in clinic'
-                            : 'Select doctor'
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {doctors.map((d) => (
-                        <SelectItem key={d._id} value={d._id}>
-                          {d.name}
-                          {d.specialization ? ` · ${d.specialization}` : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    id="r-doc"
-                    value={form.doctor}
-                    onChange={(e) => setForm({ ...form, doctor: e.target.value })}
-                    placeholder="e.g. Dr. Sharma"
-                  />
-                )}
+                <Select
+                  value={form.doctorId || undefined}
+                  onValueChange={(v) => {
+                    const picked = doctors.find((d) => d._id === v);
+                    setForm({
+                      ...form,
+                      doctorId: v,
+                      doctor: picked?.name || '',
+                    });
+                  }}
+                >
+                  <SelectTrigger id="r-doc">
+                    <SelectValue
+                      placeholder={
+                        doctors.length === 0
+                          ? 'No doctors in clinic'
+                          : 'Select doctor'
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {doctors.map((d) => (
+                      <SelectItem key={d._id} value={d._id}>
+                        {d.name}
+                        {d.specialization ? ` · ${d.specialization}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -1356,106 +1339,27 @@ export default function PatientDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* View prescription modal */}
-      <Dialog
-        open={!!viewingPrescription}
-        onOpenChange={(o) => !o && setViewingPrescription(null)}
-      >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="truncate">
-              {viewingPrescription?.condition || 'Prescription'}
-            </DialogTitle>
-            <DialogDescription>
-              Prescription details and medications.
-            </DialogDescription>
-          </DialogHeader>
-          {viewingPrescription ? (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Date
-                  </div>
-                  <div className="mt-0.5 tabular-nums">
-                    {formatDate(viewingPrescription.date)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Doctor
-                  </div>
-                  <div className="mt-0.5">
-                    {viewingPrescription.doctor || '—'}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Medications ({viewingPrescription.medications?.length || 0})
-                </div>
-                {viewingPrescription.medications?.length ? (
-                  <ul className="space-y-2">
-                    {viewingPrescription.medications.map((m, i) => (
-                      <li
-                        key={m._id || i}
-                        className="rounded-md border bg-muted/30 px-3 py-2.5 text-sm"
-                      >
-                        <div className="flex items-baseline gap-2">
-                          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border bg-background text-[10px] font-semibold tabular-nums text-muted-foreground">
-                            {i + 1}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-medium">{m.name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {[m.dosage, m.frequency, m.duration]
-                                .filter(Boolean)
-                                .join(' · ') || '—'}
-                            </div>
-                            {m.instructions ? (
-                              <div className="mt-1 text-xs leading-relaxed text-foreground/70">
-                                {m.instructions}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : viewingPrescription.treatment ? (
-                  <p className="rounded-md border bg-muted/30 px-3 py-2.5 text-sm text-foreground/80">
-                    {viewingPrescription.treatment}
-                  </p>
-                ) : (
-                  <div className="rounded-md border bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground">
-                    No medications recorded.
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setViewingPrescription(null)}
-            >
-              Close
-            </Button>
-            {viewingPrescription ? (
-              <Button
-                onClick={() => {
-                  const target = viewingPrescription;
-                  setViewingPrescription(null);
-                  openEditPrescription(target);
-                }}
-              >
-                <Pencil className="size-3.5" /> Edit
-              </Button>
-            ) : null}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* View prescription — full-screen printable document */}
+      <PrescriptionViewer
+        prescription={viewingPrescription}
+        patient={patient}
+        clinic={selectedClinic}
+        doctor={
+          viewingPrescription
+            ? doctors.find(
+                (d) =>
+                  d._id === viewingPrescription.doctorId ||
+                  (d.name && d.name === viewingPrescription.doctor),
+              )
+            : null
+        }
+        onClose={() => setViewingPrescription(null)}
+        onEdit={() => {
+          const target = viewingPrescription;
+          setViewingPrescription(null);
+          openEditPrescription(target);
+        }}
+      />
 
       {/* Edit prescription modal */}
       <Dialog
@@ -1751,6 +1655,132 @@ export default function PatientDetail() {
 
 /* ───────────────────────── helpers ───────────────────────── */
 
+function PrescriptionViewer({ prescription, patient, clinic, doctor, onClose, onEdit }) {
+  const open = !!prescription;
+
+  // Lock the page scroll while the overlay is open. Also flag <body> so
+  // the print stylesheet can target only the printable subtree.
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const body = document.body;
+    const prevOverflow = body.style.overflow;
+    body.style.overflow = 'hidden';
+    body.classList.add('rx-print-mode');
+    return () => {
+      body.style.overflow = prevOverflow;
+      body.classList.remove('rx-print-mode');
+    };
+  }, [open]);
+
+  function handlePrint() {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  }
+
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      data-rx-portal
+      className="fixed inset-0 z-50 flex flex-col bg-zinc-100 dark:bg-zinc-950"
+    >
+      <style>{`
+        @media print {
+          @page { size: A4; margin: 12mm; }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+          /* Hide every body subtree that isn't our portal. */
+          body.rx-print-mode > *:not([data-rx-portal]) { display: none !important; }
+          /* Hide chrome marked screen-only (toolbar). */
+          [data-rx-screen-only] { display: none !important; }
+          /* Neutralize the overlay's layout so the sheet flows on the page. */
+          [data-rx-portal] {
+            position: static !important;
+            inset: auto !important;
+            background: #ffffff !important;
+            display: block !important;
+          }
+          [data-rx-portal] [data-rx-scroll] {
+            overflow: visible !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+          #rx-print-sheet {
+            position: static !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+            background: #ffffff !important;
+            width: 100% !important;
+            max-width: none !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            min-height: calc(297mm - 24mm); /* A4 height minus @page margins */
+            display: flex !important;
+            flex-direction: column !important;
+          }
+          /* The PrescriptionDocument fills the available height. */
+          #rx-print-area {
+            flex: 1 1 auto !important;
+            display: flex !important;
+            flex-direction: column !important;
+            box-shadow: none !important;
+            border: none !important;
+          }
+        }
+      `}</style>
+
+      {/* Toolbar — screen only */}
+      <div
+        data-rx-screen-only
+        className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3 shadow-sm"
+      >
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
+            <X className="size-4" /> Close
+          </Button>
+          <Separator orientation="vertical" className="h-6" />
+          <span className="text-sm font-medium">
+            Prescription {prescription?.condition ? `— ${prescription.condition}` : ''}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {onEdit ? (
+            <Button variant="outline" size="sm" onClick={onEdit}>
+              <Pencil className="size-3.5" /> Edit
+            </Button>
+          ) : null}
+          <Button size="sm" onClick={handlePrint}>
+            <Printer className="size-4" /> Print / Save as PDF
+          </Button>
+        </div>
+      </div>
+
+      {/* Document area */}
+      <div data-rx-scroll className="flex-1 overflow-auto px-4 py-6 sm:px-8 sm:py-8">
+        <div
+          id="rx-print-sheet"
+          className="mx-auto w-full max-w-[820px] rounded-lg bg-white shadow-md ring-1 ring-zinc-200"
+        >
+          <div id="rx-print-area" className="flex flex-1 flex-col">
+            <PrescriptionDocument
+              prescription={prescription}
+              patient={patient}
+              clinic={clinic}
+              doctor={doctor}
+            />
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function SummarySection({ title, meta, children }) {
   return (
     <section className="space-y-2.5">
@@ -1990,6 +2020,7 @@ function RecordsTabCard({
   onDelete,
   deletingReportId,
   deletingPrescriptionId,
+  sharingEntryId,
 }) {
   const meta = TYPE_META[type];
   const [search, setSearch] = useState('');
@@ -2049,6 +2080,7 @@ function RecordsTabCard({
             onShare={onShare}
             onDelete={onDelete}
             deletingReportId={deletingReportId}
+            sharingEntryId={sharingEntryId}
           />
         ) : isPrescription ? (
           <PrescriptionsTable
@@ -2059,6 +2091,7 @@ function RecordsTabCard({
             onShare={onShare}
             onDelete={onDelete}
             deletingPrescriptionId={deletingPrescriptionId}
+            sharingEntryId={sharingEntryId}
           />
         ) : (
           <RecordsList type={type} records={filteredRecords} onAdd={onAdd} />
@@ -2173,6 +2206,7 @@ function ReportsTable({
   onShare,
   onDelete,
   deletingReportId,
+  sharingEntryId,
 }) {
   const meta = TYPE_META.report;
   const Icon = meta.icon;
@@ -2283,8 +2317,15 @@ function ReportsTable({
                       <Eye className="size-4" />
                       View
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onShare(r)}>
-                      <Share2 className="size-4" />
+                    <DropdownMenuItem
+                      onClick={() => onShare(r)}
+                      disabled={sharingEntryId === r._id}
+                    >
+                      {sharingEntryId === r._id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Share2 className="size-4" />
+                      )}
                       Share with patient
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -2314,6 +2355,7 @@ function PrescriptionsTable({
   onShare,
   onDelete,
   deletingPrescriptionId,
+  sharingEntryId,
 }) {
   const meta = TYPE_META.prescription;
   const Icon = meta.icon;
@@ -2457,8 +2499,15 @@ function PrescriptionsTable({
                       <Eye className="size-4" />
                       View
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onShare(r)}>
-                      <Share2 className="size-4" />
+                    <DropdownMenuItem
+                      onClick={() => onShare(r)}
+                      disabled={sharingEntryId === r._id}
+                    >
+                      {sharingEntryId === r._id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Share2 className="size-4" />
+                      )}
                       Share with patient
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -2538,13 +2587,12 @@ function MedicationsSection({ medications, onChange }) {
 
             <div className="space-y-1.5">
               <Label htmlFor={`med-name-${idx}`}>Medication Name *</Label>
-              <Input
+              <MedicineNameInput
                 id={`med-name-${idx}`}
                 required
                 value={med.name}
-                onChange={(e) => update(idx, { name: e.target.value })}
-                placeholder="e.g. Melatonin"
-                className="bg-background"
+                onChange={(name) => update(idx, { name })}
+                placeholder="Start typing to search medicines..."
               />
             </div>
 

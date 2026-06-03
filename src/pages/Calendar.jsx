@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import Layout from '../components/Layout/Layout';
@@ -16,15 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { StatusBadge } from '@/components/common/status-badge';
+import { AppointmentDetailsDialog } from '@/components/appointments/AppointmentDetailsDialog';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -91,12 +83,6 @@ function sortAppointments(list) {
   });
 }
 
-function resolvePatientId(patientId) {
-  if (patientId == null) return null;
-  if (typeof patientId === 'string') return patientId;
-  return patientId._id ?? null;
-}
-
 function startOfWeekContaining(d) {
   const dow = d.getDay();
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow);
@@ -129,10 +115,6 @@ export default function CalendarPage() {
     () => getVisibleRange(viewMode, currentDate),
     [viewMode, currentDate],
   );
-
-  const popupPatientId = appointmentPopup
-    ? resolvePatientId(appointmentPopup.patientId)
-    : null;
 
   useEffect(() => {
     if (selectedClinicId) loadAppointmentsForRange();
@@ -469,68 +451,10 @@ export default function CalendarPage() {
         ) : null}
       </Card>
 
-      <Dialog
-        open={!!appointmentPopup}
-        onOpenChange={(o) => !o && setAppointmentPopup(null)}
-      >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Appointment</DialogTitle>
-            {appointmentPopup ? (
-              <DialogDescription className="tabular-nums">
-                {appointmentPopup.time} · {appointmentPopup.date}
-              </DialogDescription>
-            ) : null}
-          </DialogHeader>
-          {appointmentPopup ? (
-            <div className="grid grid-cols-[88px_1fr] gap-y-2 text-sm">
-              {appointmentPopup.tokenNumber ? (
-                <>
-                  <span className="text-muted-foreground">Token</span>
-                  <span className="font-semibold tabular-nums">
-                    #{appointmentPopup.tokenNumber}
-                  </span>
-                </>
-              ) : null}
-              <span className="text-muted-foreground">Patient</span>
-              <span className="font-medium">{appointmentPopup.patientId?.name || '—'}</span>
-              {appointmentPopup.doctorId?.name ? (
-                <>
-                  <span className="text-muted-foreground">Doctor</span>
-                  <span>{appointmentPopup.doctorId.name}</span>
-                </>
-              ) : null}
-              <span className="text-muted-foreground">Status</span>
-              <span>
-                <StatusBadge status={appointmentPopup.status} />
-              </span>
-              {appointmentPopup.issue ? (
-                <>
-                  <span className="text-muted-foreground">Notes</span>
-                  <span>{appointmentPopup.issue}</span>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          <DialogFooter className="sm:justify-between">
-            {popupPatientId ? (
-              <Button asChild variant="outline">
-                <Link
-                  to={`/patients/${popupPatientId}`}
-                  onClick={() => setAppointmentPopup(null)}
-                >
-                  View patient <ChevronRight className="size-4" />
-                </Link>
-              </Button>
-            ) : (
-              <span className="text-xs text-muted-foreground">
-                Patient record unavailable
-              </span>
-            )}
-            <Button onClick={() => setAppointmentPopup(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AppointmentDetailsDialog
+        appointment={appointmentPopup}
+        onClose={() => setAppointmentPopup(null)}
+      />
     </Layout>
   );
 }
