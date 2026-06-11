@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import Layout from '../components/Layout/Layout';
 import * as api from '../api';
 import DoctorCalendarPanel from '../components/doctor/DoctorCalendarPanel';
+import { SignatureCanvas } from '../components/doctor/SignatureCanvas';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -41,6 +42,7 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { StatusBadge } from '@/components/common/status-badge';
+import { trimSignatureDataUrl } from '@/utils/signatureTrim';
 
 const WEEK = [
   { key: 'monday', label: 'Monday' },
@@ -85,10 +87,13 @@ export default function DoctorDetail() {
   const [profile, setProfile] = useState({
     name: '',
     specialization: '',
+    qualifications: '',
+    registrationNo: '',
     email: '',
     phone: '',
     notes: '',
     isActive: true,
+    signatureData: '',
   });
 
   const [availability, setAvailability] = useState(emptyAvailability);
@@ -127,10 +132,13 @@ export default function DoctorDetail() {
       setProfile({
         name: d.name || '',
         specialization: d.specialization || '',
+        qualifications: d.qualifications || '',
+        registrationNo: d.registrationNo || '',
         email: d.email || '',
         phone: d.phone || '',
         notes: d.notes || '',
         isActive: d.isActive !== false,
+        signatureData: d.signatureData || '',
       });
       const next = emptyAvailability();
       if (d.availability && typeof d.availability === 'object') {
@@ -157,8 +165,13 @@ export default function DoctorDetail() {
     e.preventDefault();
     setSavingProfile(true);
     try {
-      const res = await api.updateDoctor(id, profile);
+      const signatureData = profile.signatureData
+        ? await trimSignatureDataUrl(profile.signatureData)
+        : '';
+      const payload = { ...profile, signatureData };
+      const res = await api.updateDoctor(id, payload);
       setDoctor(res.data.data);
+      setProfile((prev) => ({ ...prev, signatureData }));
       toast.success('Profile saved');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to save');
@@ -296,7 +309,29 @@ export default function DoctorDetail() {
                       onChange={(e) =>
                         setProfile({ ...profile, specialization: e.target.value })
                       }
-                      placeholder="e.g. Orthodontics"
+                      placeholder="e.g. Orthodontist"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dp-qual">Qualifications</Label>
+                    <Input
+                      id="dp-qual"
+                      value={profile.qualifications}
+                      onChange={(e) =>
+                        setProfile({ ...profile, qualifications: e.target.value })
+                      }
+                      placeholder="e.g. BDS, MDS (Orthodontics)"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dp-reg">Registration no.</Label>
+                    <Input
+                      id="dp-reg"
+                      value={profile.registrationNo}
+                      onChange={(e) =>
+                        setProfile({ ...profile, registrationNo: e.target.value })
+                      }
+                      placeholder="e.g. DMC/12345"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -330,6 +365,18 @@ export default function DoctorDetail() {
                     rows={3}
                     value={profile.notes}
                     onChange={(e) => setProfile({ ...profile, notes: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Doctor signature</Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Draw the signature used on prescriptions and shared PDFs.
+                  </p>
+                  <SignatureCanvas
+                    value={profile.signatureData}
+                    onChange={(signatureData) =>
+                      setProfile({ ...profile, signatureData })
+                    }
                   />
                 </div>
                 <div className="flex items-center gap-2">

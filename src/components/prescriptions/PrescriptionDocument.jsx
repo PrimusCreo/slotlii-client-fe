@@ -1,17 +1,14 @@
-import {
-  FileText,
-  Mail,
-  MapPin,
-  Phone,
-  Pill,
-  Stethoscope,
-  User,
-  CalendarDays,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Heart, Phone } from 'lucide-react';
 
-const PRIMARY = '#F97316';
-const PRIMARY_TINT = '#FFF7ED';
-const PRIMARY_BORDER = '#FED7AA';
+import { trimSignatureDataUrl } from '@/utils/signatureTrim';
+
+const PRIMARY = '#fe6e00';
+const PRIMARY_TINT = '#FFF4EB';
+const PRIMARY_SOFT = '#FFFAF5';
+const PRIMARY_BORDER = '#FFD7B5';
+const TEXT = '#1f2937';
+const TEXT_MUTED = '#6b7280';
 
 function formatDate(value) {
   if (!value) return '';
@@ -48,251 +45,433 @@ function ageGenderLine(patient) {
   return parts.join(' / ') || '—';
 }
 
-function SectionHeader({ icon: Icon, label }) {
+/**
+ * Derive a stable, human-readable prescription id from the entry's date and
+ * Mongo `_id`. Format: RX + YYMMDD + last 4 hex chars (uppercase) of _id.
+ * Falls back to a numeric-only suffix when no _id is present yet (preview).
+ */
+function buildPrescriptionId(prescription) {
+  const d = prescription?.date ? new Date(prescription.date) : new Date();
+  const yy = String(d.getFullYear() % 100).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const id = String(prescription?._id || '').replace(/[^a-zA-Z0-9]/g, '');
+  const suffix = id ? id.slice(-4).toUpperCase() : '0001';
+  return `RX${yy}${mm}${dd}${suffix}`;
+}
+
+/**
+ * Split a free-text findings string into bullet points by newlines.
+ * Returns null when the input is empty.
+ */
+function formatFollowUp(value) {
+  if (!value) return '';
+  const str = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return formatDate(str);
+  const d = new Date(str);
+  if (!Number.isNaN(d.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(str)) {
+    return formatDate(str);
+  }
+  return str;
+}
+
+function splitBullets(text) {
+  if (!text) return null;
+  const items = String(text)
+    .split(/\r?\n/)
+    .map((s) => s.replace(/^\s*[-•*]\s*/, '').trim())
+    .filter(Boolean);
+  return items.length ? items : null;
+}
+
+function ClinicalRow({ label, value, striped }) {
+  if (!value) return null;
+  const bullets = splitBullets(value);
+  const isList = bullets && bullets.length > 1;
   return (
-    <div className="flex items-center gap-2">
-      <span
-        className="flex size-6 items-center justify-center rounded-md"
-        style={{ backgroundColor: PRIMARY_TINT, color: PRIMARY }}
-      >
-        <Icon className="size-3.5" />
-      </span>
-      <span
-        className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+    <div
+      className="grid grid-cols-[200px_16px_1fr] items-start gap-x-3 border-l-[3px] px-5 py-3.5"
+      style={{
+        borderColor: PRIMARY,
+        backgroundColor: striped ? PRIMARY_SOFT : '#ffffff',
+      }}
+    >
+      <div
+        className="text-[11px] font-semibold uppercase tracking-[0.08em]"
         style={{ color: PRIMARY }}
       >
         {label}
-      </span>
-      <span
-        className="ml-2 h-px flex-1"
-        style={{ backgroundColor: PRIMARY_BORDER }}
-      />
-    </div>
-  );
-}
-
-function InfoRow({ icon: Icon, label, value }) {
-  return (
-    <div className="flex items-start gap-3">
-      <span
-        className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md"
-        style={{ backgroundColor: PRIMARY_TINT, color: PRIMARY }}
-      >
-        <Icon className="size-3.5" />
-      </span>
-      <div className="min-w-0">
-        <div className="text-[11px] uppercase tracking-wide text-zinc-500">
-          {label}
-        </div>
-        <div className="text-sm font-semibold text-zinc-900">{value || '—'}</div>
+      </div>
+      <div className="text-[11px] font-semibold" style={{ color: PRIMARY }}>
+        :
+      </div>
+      <div className="text-[13px] leading-relaxed" style={{ color: TEXT }}>
+        {isList ? (
+          <ul className="list-disc space-y-1 pl-4">
+            {bullets.map((b, i) => (
+              <li key={i}>{b}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="whitespace-pre-line">{value}</p>
+        )}
       </div>
     </div>
   );
 }
 
+function InfoCell({ label, value }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span
+        className="shrink-0 text-[11px] font-medium"
+        style={{ color: TEXT_MUTED }}
+      >
+        {label}
+      </span>
+      <span className="text-[11px]" style={{ color: TEXT_MUTED }}>
+        :
+      </span>
+      <span
+        className="truncate text-[13px] font-semibold"
+        style={{ color: TEXT }}
+      >
+        {value || '—'}
+      </span>
+    </div>
+  );
+}
+
 export function PrescriptionDocument({ prescription, patient, clinic, doctor }) {
+  const rawSignatureData = doctor?.signatureData || '';
+  const [displaySignature, setDisplaySignature] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!rawSignatureData) {
+      setDisplaySignature('');
+      return undefined;
+    }
+    trimSignatureDataUrl(rawSignatureData).then((trimmed) => {
+      if (!cancelled) setDisplaySignature(trimmed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rawSignatureData]);
+
   if (!prescription) return null;
 
   const meds = prescription.medications || [];
   const clinicName = clinic?.name || 'Clinic';
   const clinicAddress = clinic?.address;
   const clinicPhone = clinic?.phone;
-  const clinicEmail = clinic?.email;
-  const clinicWebsite = clinic?.website;
-  const monogram = clinicName.trim().charAt(0).toUpperCase() || 'C';
 
   const doctorName = doctor?.name || prescription.doctor || '';
+  const doctorQualifications = doctor?.qualifications || '';
   const doctorSpec = doctor?.specialization || '';
+  const doctorRegNo = doctor?.registrationNo || '';
 
-  const showContactRow = !!(clinicPhone || clinicEmail || clinicWebsite);
+  const rxId = buildPrescriptionId(prescription);
+
+  // Map "Chief Complaint" → falls back to entry.notes so the section is
+  // never empty for legacy prescriptions; same for Assessment & Plan ←
+  // legacy `condition` (diagnosis) field.
+  const chiefComplaint = prescription.chiefComplaint || prescription.notes || '';
+  const medicalHistory = prescription.medicalHistory || '';
+  const examinationFindings = prescription.examinationFindings || '';
+  const treatmentDone =
+    prescription.treatmentDone ||
+    prescription.assessmentPlan ||
+    prescription.condition ||
+    '';
+  const followUp = formatFollowUp(prescription.followUp);
 
   return (
     <div
-      className="mx-auto flex w-full max-w-[820px] flex-1 flex-col bg-white text-zinc-900"
+      className="mx-auto flex w-full max-w-[820px] flex-1 flex-col bg-white"
       style={{
+        color: TEXT,
         fontFamily:
           "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
       }}
     >
-      {/* Header — clinic */}
+      {/* Header — clinic + Rx pill */}
       <div className="flex items-start justify-between gap-6 px-8 pt-8">
-        <div className="flex items-start gap-4">
-          <div
-            className="flex size-14 shrink-0 items-center justify-center rounded-lg text-2xl font-extrabold text-white"
-            style={{ backgroundColor: PRIMARY }}
+        <div className="min-w-0">
+          <h1
+            className="text-[22px] font-bold leading-tight"
+            style={{ color: TEXT }}
           >
-            {monogram}
-          </div>
-          <div>
-            <h1
-              className="text-[22px] font-bold leading-tight"
-              style={{ color: PRIMARY }}
+            {clinicName}
+          </h1>
+          {clinicAddress ? (
+            <p
+              className="mt-1.5 max-w-[360px] whitespace-pre-line text-[12px] leading-relaxed"
+              style={{ color: TEXT_MUTED }}
             >
-              {clinicName}
-            </h1>
-            {clinicAddress ? (
-              <p className="mt-1 max-w-[320px] whitespace-pre-line text-xs leading-relaxed text-zinc-600">
-                {clinicAddress}
-              </p>
-            ) : null}
-            {showContactRow ? (
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-600">
-                {clinicPhone ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Phone className="size-3" style={{ color: PRIMARY }} />
-                    {clinicPhone}
-                  </span>
-                ) : null}
-                {clinicEmail ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Mail className="size-3" style={{ color: PRIMARY }} />
-                    {clinicEmail}
-                  </span>
-                ) : null}
-                {clinicWebsite ? (
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="size-3" style={{ color: PRIMARY }} />
-                    {clinicWebsite}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      <div className="my-5 mx-8 h-px" style={{ backgroundColor: PRIMARY_BORDER }} />
-
-      {/* Doctor + Rx title */}
-      <div className="flex items-center justify-between gap-6 px-8">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
-            <User className="size-5" />
-          </div>
-          <div>
-            <div className="text-base font-bold text-zinc-900">
-              {doctorName || '—'}
+              {clinicAddress}
+            </p>
+          ) : null}
+          {clinicPhone ? (
+            <div
+              className="mt-2 inline-flex items-center gap-1.5 text-[12px]"
+              style={{ color: TEXT_MUTED }}
+            >
+              <Phone className="size-3" style={{ color: PRIMARY }} />
+              <span>{clinicPhone}</span>
             </div>
-            {doctorSpec ? (
-              <div className="text-xs text-zinc-600">{doctorSpec}</div>
-            ) : null}
-          </div>
-        </div>
-        <div
-          className="flex items-baseline gap-2 text-2xl font-extrabold tracking-wide"
-          style={{ color: PRIMARY }}
-        >
-          <span style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
-            ℞
-          </span>
-          <span>PRESCRIPTION</span>
-        </div>
-      </div>
-
-      {/* Patient details box */}
-      <div className="mx-8 mt-5 rounded-md border border-zinc-200 bg-white">
-        <div className="grid grid-cols-2 gap-4 px-5 py-4">
-          <InfoRow icon={User} label="Patient Name" value={patient?.name} />
-          <InfoRow icon={CalendarDays} label="Date" value={formatDate(prescription.date)} />
-          <InfoRow icon={User} label="Age / Gender" value={ageGenderLine(patient)} />
-          {patient?.phone ? (
-            <InfoRow icon={Phone} label="Phone" value={patient.phone} />
           ) : null}
         </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div
+            className="flex items-center gap-3 rounded-md px-5 py-2.5 text-white"
+            style={{ backgroundColor: PRIMARY }}
+          >
+            <span className="text-[15px] font-bold tracking-wider">
+              PRESCRIPTION
+            </span>
+            <span
+              className="flex size-7 items-center justify-center rounded-md bg-white text-[15px] font-bold"
+              style={{ color: PRIMARY, fontFamily: 'Georgia, serif' }}
+            >
+              ℞
+            </span>
+          </div>
+          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+            Prescription ID :{' '}
+            <span className="font-semibold" style={{ color: TEXT }}>
+              {rxId}
+            </span>
+          </div>
+        </div>
       </div>
 
-      {/* Diagnosis */}
-      {prescription.condition ? (
-        <div className="mx-8 mt-5">
-          <SectionHeader icon={Stethoscope} label="Diagnosis" />
-          <p className="mt-2 text-sm text-zinc-800">{prescription.condition}</p>
+      <div
+        className="mx-8 mt-5 h-px"
+        style={{ backgroundColor: PRIMARY_BORDER }}
+      />
+
+      {/* Doctor + Patient details row */}
+      <div className="mx-8 mt-5 grid grid-cols-[1fr_1.4fr] gap-5">
+        <div className="min-w-0">
+          <div className="text-[15px] font-bold" style={{ color: TEXT }}>
+            {doctorName || '—'}
+          </div>
+          {doctorQualifications ? (
+            <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
+              {doctorQualifications}
+            </div>
+          ) : null}
+          {doctorSpec ? (
+            <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
+              {doctorSpec}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+
+        <div
+          className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-md border px-4 py-3"
+          style={{ borderColor: PRIMARY_BORDER, backgroundColor: PRIMARY_SOFT }}
+        >
+          <InfoCell label="Patient Name" value={patient?.name} />
+          <InfoCell label="Date" value={formatDate(prescription.date)} />
+          <InfoCell label="Age / Gender" value={ageGenderLine(patient)} />
+          <InfoCell label="Phone" value={patient?.phone} />
+        </div>
+      </div>
+
+      {/* Clinical sections */}
+      <div
+        className="mx-8 mt-5 overflow-hidden rounded-md border"
+        style={{ borderColor: PRIMARY_BORDER }}
+      >
+        <ClinicalRow
+          label="Chief Complaint / Subjective"
+          value={chiefComplaint}
+          striped={false}
+        />
+        <ClinicalRow
+          label="Medical History"
+          value={medicalHistory}
+          striped
+        />
+        <ClinicalRow
+          label="Examination / Findings"
+          value={examinationFindings}
+          striped={false}
+        />
+        <ClinicalRow
+          label="Treatment Done"
+          value={treatmentDone}
+          striped
+        />
+      </div>
 
       {/* Medicines */}
       <div className="mx-8 mt-5">
-        <SectionHeader icon={Pill} label="Medicines" />
+        <div className="flex items-center gap-3">
+          <span
+            className="inline-block h-4 w-[3px]"
+            style={{ backgroundColor: PRIMARY }}
+          />
+          <span
+            className="text-[12px] font-semibold uppercase tracking-[0.1em]"
+            style={{ color: PRIMARY }}
+          >
+            Prescription
+          </span>
+        </div>
         {meds.length ? (
-          <table className="mt-3 w-full border-collapse overflow-hidden rounded-md border border-zinc-200 text-sm">
+          <table
+            className="mt-3 w-full border-collapse overflow-hidden rounded-md border text-[12.5px]"
+            style={{ borderColor: PRIMARY_BORDER }}
+          >
             <thead>
               <tr style={{ backgroundColor: PRIMARY_TINT, color: PRIMARY }}>
-                <th className="w-10 border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
+                <th
+                  className="w-9 border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
                   #
                 </th>
-                <th className="border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
+                <th
+                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
                   Medicine
                 </th>
-                <th className="border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
-                  Dosage
+                <th
+                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
+                  Dose
                 </th>
-                <th className="border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
+                <th
+                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
                   Frequency
                 </th>
-                <th className="border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
+                <th
+                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
                   Duration
                 </th>
-                <th className="border-b border-zinc-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider">
+                <th
+                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
+                  style={{ borderColor: PRIMARY_BORDER }}
+                >
                   Instructions
                 </th>
               </tr>
             </thead>
             <tbody>
               {meds.map((m, i) => (
-                <tr key={m._id || i} className="even:bg-zinc-50/60">
-                  <td className="border-b border-zinc-200 px-3 py-2 text-zinc-500 tabular-nums">
+                <tr
+                  key={m._id || i}
+                  style={{
+                    backgroundColor: i % 2 === 1 ? PRIMARY_SOFT : '#ffffff',
+                  }}
+                >
+                  <td
+                    className="border-b px-3 py-2.5 tabular-nums"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
+                  >
                     {i + 1}
                   </td>
-                  <td className="border-b border-zinc-200 px-3 py-2 font-medium">
+                  <td
+                    className="border-b px-3 py-2.5 font-medium"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
+                  >
                     {m.name || '—'}
                   </td>
-                  <td className="border-b border-zinc-200 px-3 py-2">
+                  <td
+                    className="border-b px-3 py-2.5"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
+                  >
                     {m.dosage || '—'}
                   </td>
-                  <td className="border-b border-zinc-200 px-3 py-2">
+                  <td
+                    className="border-b px-3 py-2.5"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
+                  >
                     {m.frequency || '—'}
                   </td>
-                  <td className="border-b border-zinc-200 px-3 py-2">
+                  <td
+                    className="border-b px-3 py-2.5"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
+                  >
                     {m.duration || '—'}
                   </td>
-                  <td className="border-b border-zinc-200 px-3 py-2 text-zinc-700">
+                  <td
+                    className="border-b px-3 py-2.5"
+                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
+                  >
                     {m.instructions || '—'}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : prescription.treatment ? (
-          <p className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            {prescription.treatment}
-          </p>
         ) : (
-          <p className="mt-2 rounded-md border border-dashed border-zinc-200 bg-zinc-50 px-3 py-3 text-center text-xs text-zinc-500">
+          <p
+            className="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs"
+            style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
+          >
             No medications recorded.
           </p>
         )}
       </div>
 
-      {/* Notes (if any) */}
-      {prescription.notes ? (
-        <div className="mx-8 mt-5">
-          <SectionHeader icon={FileText} label="Notes" />
-          <p className="mt-2 whitespace-pre-line text-sm text-zinc-800">
-            {prescription.notes}
-          </p>
+      {/* Follow up */}
+      {followUp ? (
+        <div
+          className="mx-8 mt-5 overflow-hidden rounded-md border"
+          style={{ borderColor: PRIMARY_BORDER }}
+        >
+          <ClinicalRow label="Follow Up" value={followUp} striped={false} />
         </div>
       ) : null}
 
-      {/* Flexible spacer pushes the signature/footer to the bottom of the page */}
+      {/* Spacer */}
       <div className="flex-1" />
 
       {/* Signature */}
-      <div className="mx-8 mt-10 flex items-end justify-end pb-8">
+      <div className="mx-8 mt-10 flex items-end justify-end pb-6">
         <div className="text-right">
-          <div className="mb-1 h-px w-48" style={{ backgroundColor: PRIMARY_BORDER }} />
-          <div className="text-xs text-zinc-500">Doctor Signature</div>
+          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+            Doctor Signature
+          </div>
+          {displaySignature ? (
+            <img
+              src={displaySignature}
+              alt=""
+              className="ml-auto mt-2 h-16 max-w-[200px] object-contain object-right"
+            />
+          ) : null}
+          <div
+            className="mt-2 h-px w-48 ml-auto"
+            style={{ backgroundColor: PRIMARY_BORDER }}
+          />
           {doctorName ? (
-            <div className="mt-1 text-sm font-semibold text-zinc-900">
+            <div
+              className="mt-2 text-[13px] font-bold"
+              style={{ color: TEXT }}
+            >
               {doctorName}
+            </div>
+          ) : null}
+          {doctorQualifications ? (
+            <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+              {doctorQualifications}
+            </div>
+          ) : null}
+          {doctorRegNo ? (
+            <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+              Reg. No. {doctorRegNo}
             </div>
           ) : null}
         </div>
@@ -300,16 +479,24 @@ export function PrescriptionDocument({ prescription, patient, clinic, doctor }) 
 
       {/* Footer */}
       <div
-        className="border-t px-8 py-3 text-center text-[11px] text-zinc-500"
-        style={{ borderColor: PRIMARY_BORDER }}
+        className="flex items-center justify-between border-t px-8 py-3 text-[11px]"
+        style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
       >
-        Generated via{' '}
-        <span className="font-semibold" style={{ color: PRIMARY }}>
-          Slotlii
-        </span>{' '}
-        Clinic OS
+        <span className="inline-flex items-center gap-1.5">
+          <Heart
+            className="size-3 fill-current"
+            style={{ color: PRIMARY }}
+          />
+          Thank you for trusting us with your care.
+        </span>
+        <span>
+          Generated via{' '}
+          <span className="font-semibold" style={{ color: PRIMARY }}>
+            Slotlii
+          </span>{' '}
+          Clinic OS
+        </span>
       </div>
-
     </div>
   );
 }

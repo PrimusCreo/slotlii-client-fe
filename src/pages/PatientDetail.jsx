@@ -11,6 +11,7 @@ import {
   Clock,
   Download,
   Eye,
+  FileSignature,
   FileText,
   Heart,
   Loader2,
@@ -18,6 +19,7 @@ import {
   MapPin,
   MoreHorizontal,
   Pencil,
+  PenLine,
   Phone,
   Pill,
   Plus,
@@ -35,6 +37,9 @@ import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
 import { PrescriptionDocument } from '@/components/prescriptions/PrescriptionDocument';
 import { MedicineNameInput } from '@/components/prescriptions/MedicineNameInput';
+import { ConsentFormModal } from '@/components/consents/ConsentFormModal';
+import { ConsentSignDialog } from '@/components/consents/ConsentSignDialog';
+import { ConsentViewer } from '@/components/consents/ConsentViewer';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -90,6 +95,7 @@ const TABS = [
   { key: 'consultation', label: 'Consultations', icon: Stethoscope },
   { key: 'prescription', label: 'Prescriptions', icon: Pill },
   { key: 'reports', label: 'Reports', icon: ClipboardList },
+  { key: 'consents', label: 'Consents', icon: FileSignature },
 ];
 
 const TYPE_META = {
@@ -111,12 +117,32 @@ const TYPE_META = {
     tint: 'bg-[color:var(--status-noshow-bg)] text-[color:var(--status-noshow)]',
     dotBg: 'var(--status-noshow)',
   },
+  consent: {
+    label: 'Consent',
+    icon: FileSignature,
+    tint: 'bg-primary/10 text-primary',
+    dotBg: 'var(--primary)',
+  },
   appointment: {
     label: 'Appointment',
     icon: Calendar,
     tint: 'bg-primary/10 text-primary',
     dotBg: 'var(--primary)',
   },
+};
+
+const CONSENT_STATUS_LABEL = {
+  draft: 'Draft',
+  sent: 'Sent',
+  signed: 'Signed',
+  expired: 'Expired',
+};
+
+const CONSENT_STATUS_CLASS = {
+  draft: 'bg-zinc-100 text-zinc-700',
+  sent: 'bg-amber-100 text-amber-800',
+  signed: 'bg-emerald-100 text-emerald-800',
+  expired: 'bg-rose-100 text-rose-800',
 };
 
 function formatDate(d) {
@@ -184,6 +210,51 @@ function joinDuration(count, unit) {
   return `${c} ${unit || 'days'}`;
 }
 
+/** Format a Date as YYYY-MM-DD in local time (for `<input type="date">`). */
+function localDateInputValue(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Earliest selectable follow-up date — tomorrow (local time). */
+function minFollowUpDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return localDateInputValue(d);
+}
+
+function isUpcomingFollowUpDate(value) {
+  if (!value) return true;
+  const str = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  return str >= minFollowUpDate();
+}
+
+/** Normalize a stored follow-up value for `<input type="date">`. */
+function toDateInputValue(value) {
+  if (!value) return '';
+  const str = String(value).trim();
+  let normalized = '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    normalized = str;
+  } else {
+    const d = new Date(str);
+    if (!Number.isNaN(d.getTime())) normalized = localDateInputValue(d);
+  }
+  if (!normalized || !isUpcomingFollowUpDate(normalized)) return '';
+  return normalized;
+}
+
+function followUpDateError(value) {
+  if (!value) return null;
+  if (!isUpcomingFollowUpDate(value)) {
+    return 'Follow up date must be a future date';
+  }
+  return null;
+}
+
 const initialForm = {
   date: new Date().toISOString().slice(0, 10),
   title: '',
@@ -194,6 +265,11 @@ const initialForm = {
   diagnosis: '',
   reportName: '',
   files: [],
+  chiefComplaint: '',
+  medicalHistory: '',
+  examinationFindings: '',
+  treatmentDone: '',
+  followUp: '',
 };
 
 export default function PatientDetail() {
@@ -238,10 +314,24 @@ export default function PatientDetail() {
     doctorId: '',
     doctor: '',
     medications: [emptyMedication()],
+    chiefComplaint: '',
+    medicalHistory: '',
+    examinationFindings: '',
+    treatmentDone: '',
+    followUp: '',
   });
   const [savingEditPrescription, setSavingEditPrescription] = useState(false);
   const [deletingPrescriptionId, setDeletingPrescriptionId] = useState(null);
   const [sharingEntryId, setSharingEntryId] = useState(null);
+
+  // ── Consents ─────────────────────────────────────────────
+  const [consentTemplates, setConsentTemplates] = useState([]);
+  const [consentModalMode, setConsentModalMode] = useState(null); // 'create' | 'edit'
+  const [editingConsent, setEditingConsent] = useState(null);
+  const [savingConsent, setSavingConsent] = useState(false);
+  const [viewingConsent, setViewingConsent] = useState(null);
+  const [signingConsent, setSigningConsent] = useState(null);
+  const [signingConsentInFlight, setSigningConsentInFlight] = useState(false);
 
   useEffect(() => {
     loadPatientData();
@@ -267,6 +357,22 @@ export default function PatientDetail() {
       cancelled = true;
     };
   }, [clinicId]);
+
+  // Lazy-load consent templates the first time the user opens the
+  // Consents tab (or the Create modal). They never change during a session
+  // unless edited in Settings, so a single fetch is fine.
+  async function ensureConsentTemplates() {
+    if (consentTemplates.length > 0 || !clinicId) return consentTemplates;
+    try {
+      const res = await api.getConsentTemplates({ clinicId });
+      const list = res.data?.data || [];
+      setConsentTemplates(list);
+      return list;
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load consent templates');
+      return [];
+    }
+  }
 
   async function loadPatientData() {
     try {
@@ -326,6 +432,12 @@ export default function PatientDetail() {
           setSavingRecord(false);
           return;
         }
+        const followUpErr = followUpDateError(form.followUp);
+        if (followUpErr) {
+          toast.error(followUpErr);
+          setSavingRecord(false);
+          return;
+        }
         await api.addMedicalHistory(id, {
           type: 'prescription',
           date: form.date,
@@ -333,6 +445,11 @@ export default function PatientDetail() {
           medications: meds,
           doctor: form.doctor,
           doctorId: form.doctorId || undefined,
+          chiefComplaint: form.chiefComplaint,
+          medicalHistory: form.medicalHistory,
+          examinationFindings: form.examinationFindings,
+          treatmentDone: form.treatmentDone,
+          followUp: form.followUp,
         });
       } else {
         const payload = {
@@ -514,6 +631,11 @@ export default function PatientDetail() {
             instructions: m.instructions || '',
           }))
           : [emptyMedication()],
+      chiefComplaint: rx.chiefComplaint || '',
+      medicalHistory: rx.medicalHistory || '',
+      examinationFindings: rx.examinationFindings || '',
+      treatmentDone: rx.treatmentDone || rx.assessmentPlan || '',
+      followUp: toDateInputValue(rx.followUp),
     });
     setEditingPrescription(rx);
   }
@@ -538,6 +660,11 @@ export default function PatientDetail() {
       toast.error('Diagnosis is required');
       return;
     }
+    const followUpErr = followUpDateError(editPrescriptionForm.followUp);
+    if (followUpErr) {
+      toast.error(followUpErr);
+      return;
+    }
     setSavingEditPrescription(true);
     try {
       await api.updatePatientMedicalHistory(id, editingPrescription._id, {
@@ -546,6 +673,11 @@ export default function PatientDetail() {
         medications: meds,
         doctor: editPrescriptionForm.doctor,
         doctorId: editPrescriptionForm.doctorId || null,
+        chiefComplaint: editPrescriptionForm.chiefComplaint,
+        medicalHistory: editPrescriptionForm.medicalHistory,
+        examinationFindings: editPrescriptionForm.examinationFindings,
+        treatmentDone: editPrescriptionForm.treatmentDone,
+        followUp: editPrescriptionForm.followUp,
       });
       toast.success('Prescription updated');
       setEditingPrescription(null);
@@ -574,6 +706,132 @@ export default function PatientDetail() {
     }
   }
 
+  // ── Consent handlers ────────────────────────────────────
+  async function openCreateConsent() {
+    await ensureConsentTemplates();
+    setEditingConsent(null);
+    setConsentModalMode('create');
+  }
+
+  async function openEditConsent(entry) {
+    await ensureConsentTemplates();
+    const filled =
+      entry.filledValues instanceof Map
+        ? Object.fromEntries(entry.filledValues)
+        : entry.filledValues || {};
+    setEditingConsent({ ...entry, filledValues: filled });
+    setConsentModalMode('edit');
+  }
+
+  function closeConsentModal() {
+    if (savingConsent) return;
+    setConsentModalMode(null);
+    setEditingConsent(null);
+  }
+
+  async function handleSaveConsent(payload) {
+    setSavingConsent(true);
+    try {
+      if (consentModalMode === 'edit' && editingConsent?._id) {
+        await api.updatePatientConsent(id, editingConsent._id, payload);
+        toast.success('Consent updated');
+      } else {
+        await api.createPatientConsent(id, payload);
+        toast.success('Consent draft saved');
+      }
+      closeConsentModal();
+      await loadPatientData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save consent');
+    } finally {
+      setSavingConsent(false);
+    }
+  }
+
+  async function shareConsentWhatsApp(entry) {
+    if (!patient?.phone) {
+      toast.error('Patient has no phone number on file');
+      return;
+    }
+    setSharingEntryId(entry._id);
+    try {
+      const res = await api.sharePatientConsentViaWhatsApp(id, entry._id);
+      const to = res.data?.data?.to || patient.phone;
+      toast.success(`Signing link sent to ${to} on WhatsApp`);
+      await loadPatientData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || err.message || 'Failed to send link');
+    } finally {
+      setSharingEntryId(null);
+    }
+  }
+
+  function openSignConsent(entry) {
+    setSigningConsent(entry);
+  }
+
+  async function handleStaffSignConsent(payload) {
+    if (!signingConsent?._id) return;
+    setSigningConsentInFlight(true);
+    try {
+      await api.signPatientConsentStaff(id, signingConsent._id, payload);
+      toast.success('Consent signed');
+      setSigningConsent(null);
+      setViewingConsent(null);
+      await loadPatientData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to record signature');
+    } finally {
+      setSigningConsentInFlight(false);
+    }
+  }
+
+  function handleDownloadConsentPdf(entry) {
+    const token = localStorage.getItem('slotlii_client_token');
+    // Always re-render so layout / template fixes show up immediately,
+    // even when the consent already has a signed PDF cached in storage.
+    const url = `${api.downloadPatientConsentPdfUrl(id, entry._id)}?fresh=1`;
+    fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('Failed to download');
+        return r.blob();
+      })
+      .then((blob) => {
+        const a = document.createElement('a');
+        const objectUrl = URL.createObjectURL(blob);
+        a.href = objectUrl;
+        a.download = `${(entry.templateSnapshot?.name || entry.condition || 'consent')
+          .replace(/[^\w\s-]/g, '')
+          .trim()
+          .replace(/\s+/g, '-')
+          .slice(0, 60) || 'consent'}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      })
+      .catch(() => toast.error('Failed to download PDF'));
+  }
+
+  async function deleteConsent(entry) {
+    if (
+      !window.confirm(
+        `Delete consent "${entry.condition || entry.templateSnapshot?.name || 'this consent'}"? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.deletePatientMedicalHistory(id, entry._id);
+      toast.success('Consent deleted');
+      loadPatientData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete consent');
+    }
+  }
+
   async function deletePrescription(rx) {
     if (
       !window.confirm(
@@ -597,7 +855,7 @@ export default function PatientDetail() {
   const records = useMemo(() => patient?.medicalHistory || [], [patient]);
 
   const recordsByType = useMemo(() => {
-    const grouped = { consultation: [], prescription: [], report: [] };
+    const grouped = { consultation: [], prescription: [], report: [], consent: [] };
     records.forEach((r) => {
       const t = r.type && grouped[r.type] ? r.type : 'consultation';
       grouped[t].push(r);
@@ -624,16 +882,22 @@ export default function PatientDetail() {
     });
     records.forEach((r, idx) => {
       const t = r.type || 'consultation';
+      const isConsent = t === 'consent';
+      const consentTitle = isConsent
+        ? r.templateSnapshot?.name || r.condition || 'Consent form'
+        : null;
       items.push({
         id: r._id || `rec-${idx}`,
         date: r.date,
         type: t,
-        title: r.condition || TYPE_META[t]?.label,
+        title: isConsent ? consentTitle : r.condition || TYPE_META[t]?.label,
         subtitle: r.doctor ? `Doctor: ${r.doctor}` : null,
         description: r.notes,
         treatment: r.treatment,
         medications: r.medications || [],
         attachments: r.attachments || [],
+        consentStatus: isConsent ? r.status : null,
+        signerName: isConsent ? r.signerName : null,
       });
     });
     return items
@@ -895,6 +1159,20 @@ export default function PatientDetail() {
               sharingEntryId={sharingEntryId}
             />
           </TabsContent>
+
+          <TabsContent value="consents" className="mt-4">
+            <ConsentsTabCard
+              records={recordsByType.consent}
+              onAdd={openCreateConsent}
+              onView={setViewingConsent}
+              onEdit={openEditConsent}
+              onShare={shareConsentWhatsApp}
+              onSign={openSignConsent}
+              onDownload={handleDownloadConsentPdf}
+              onDelete={deleteConsent}
+              sharingEntryId={sharingEntryId}
+            />
+          </TabsContent>
         </Tabs>
       </div>
 
@@ -992,14 +1270,37 @@ export default function PatientDetail() {
                     onChange={(e) =>
                       setForm({ ...form, diagnosis: e.target.value })
                     }
-                    placeholder="e.g. Insomnia"
+                    placeholder="e.g. Periapical infection wrt tooth #18"
                   />
+                  <p className="text-[11px] text-muted-foreground">
+                    Used as the prescription title in lists. Detailed
+                    assessment & plan goes below.
+                  </p>
                 </div>
+
+                <ClinicalFieldsSection
+                  values={form}
+                  onChange={(patch) => setForm({ ...form, ...patch })}
+                  idPrefix="r"
+                />
 
                 <MedicationsSection
                   medications={form.medications}
                   onChange={(meds) => setForm({ ...form, medications: meds })}
                 />
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="r-followup">Follow up</Label>
+                  <Input
+                    id="r-followup"
+                    type="date"
+                    min={minFollowUpDate()}
+                    value={form.followUp}
+                    onChange={(e) =>
+                      setForm({ ...form, followUp: e.target.value })
+                    }
+                  />
+                </div>
               </>
             ) : null}
 
@@ -1424,9 +1725,17 @@ export default function PatientDetail() {
                     diagnosis: e.target.value,
                   })
                 }
-                placeholder="e.g. Insomnia"
+                placeholder="e.g. Periapical infection wrt tooth #18"
               />
             </div>
+
+            <ClinicalFieldsSection
+              values={editPrescriptionForm}
+              onChange={(patch) =>
+                setEditPrescriptionForm({ ...editPrescriptionForm, ...patch })
+              }
+              idPrefix="ep"
+            />
 
             <MedicationsSection
               medications={editPrescriptionForm.medications}
@@ -1437,6 +1746,22 @@ export default function PatientDetail() {
                 })
               }
             />
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ep-followup">Follow up</Label>
+              <Input
+                id="ep-followup"
+                type="date"
+                min={minFollowUpDate()}
+                value={editPrescriptionForm.followUp}
+                onChange={(e) =>
+                  setEditPrescriptionForm({
+                    ...editPrescriptionForm,
+                    followUp: e.target.value,
+                  })
+                }
+              />
+            </div>
 
             <DialogFooter>
               <Button
@@ -1634,6 +1959,70 @@ export default function PatientDetail() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {/* Consent: create / edit */}
+      <ConsentFormModal
+        open={!!consentModalMode}
+        mode={consentModalMode || 'create'}
+        templates={consentTemplates}
+        doctors={doctors}
+        patient={patient}
+        clinic={selectedClinic}
+        initial={editingConsent}
+        onCancel={closeConsentModal}
+        onSubmit={handleSaveConsent}
+        saving={savingConsent}
+      />
+
+      {/* Consent: viewer */}
+      <ConsentViewer
+        consent={viewingConsent}
+        patient={patient}
+        clinic={selectedClinic}
+        doctor={
+          viewingConsent
+            ? doctors.find(
+                (d) =>
+                  d._id === viewingConsent.doctorId ||
+                  (d.name && d.name === viewingConsent.doctor),
+              )
+            : null
+        }
+        onClose={() => setViewingConsent(null)}
+        onEdit={
+          viewingConsent && viewingConsent.status === 'draft'
+            ? () => {
+                const entry = viewingConsent;
+                setViewingConsent(null);
+                openEditConsent(entry);
+              }
+            : null
+        }
+        onShare={
+          viewingConsent && viewingConsent.status !== 'signed'
+            ? () => shareConsentWhatsApp(viewingConsent)
+            : null
+        }
+        onSign={
+          viewingConsent && viewingConsent.status !== 'signed'
+            ? () => openSignConsent(viewingConsent)
+            : null
+        }
+        onDownload={
+          viewingConsent ? () => handleDownloadConsentPdf(viewingConsent) : null
+        }
+        sharing={sharingEntryId === viewingConsent?._id}
+      />
+
+      {/* Consent: staff signing */}
+      <ConsentSignDialog
+        open={!!signingConsent}
+        consent={signingConsent}
+        defaultPatientName={patient?.name || ''}
+        onCancel={() => !signingConsentInFlight && setSigningConsent(null)}
+        onSign={handleStaffSignConsent}
+        saving={signingConsentInFlight}
+      />
     </Layout>
   );
 }
@@ -1926,7 +2315,19 @@ function TimelineView({ items }) {
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold">{item.title}</span>
-                    {item.status ? <StatusBadge status={item.status} /> : null}
+                    {item.status ? (
+                      <StatusBadge status={item.status} />
+                    ) : item.consentStatus ? (
+                      <span
+                        className={cn(
+                          'inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium',
+                          CONSENT_STATUS_CLASS[item.consentStatus] ||
+                            CONSENT_STATUS_CLASS.draft,
+                        )}
+                      >
+                        {CONSENT_STATUS_LABEL[item.consentStatus] || item.consentStatus}
+                      </span>
+                    ) : null}
                   </div>
                   {item.subtitle ? (
                     <div className="text-xs text-muted-foreground">{item.subtitle}</div>
@@ -2514,6 +2915,56 @@ function PrescriptionsTable({
   );
 }
 
+function ClinicalFieldsSection({ values, onChange, idPrefix }) {
+  const fields = [
+    {
+      key: 'chiefComplaint',
+      label: 'Chief Complaint / Subjective',
+      placeholder: 'e.g. Pain in lower left back tooth region since 2 days.',
+      rows: 2,
+    },
+    {
+      key: 'medicalHistory',
+      label: 'Medical History',
+      placeholder: 'e.g. Hypertension since 10 years. No known drug allergies.',
+      rows: 2,
+    },
+    {
+      key: 'examinationFindings',
+      label: 'Examination / Findings',
+      placeholder:
+        'One finding per line, e.g.\nFood lodgement present\nPeriapical infection wrt tooth #18\nTenderness on percussion',
+      rows: 3,
+    },
+    {
+      key: 'treatmentDone',
+      label: 'Treatment Done',
+      placeholder:
+        'e.g. RCT #18 initiated.\nWorking Length — MB: 22 mm, ML: 20 mm\nIrrigation: NS',
+      rows: 3,
+    },
+  ];
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Clinical details
+      </div>
+      {fields.map((f) => (
+        <div key={f.key} className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-${f.key}`}>{f.label}</Label>
+          <Textarea
+            id={`${idPrefix}-${f.key}`}
+            rows={f.rows}
+            value={values[f.key] || ''}
+            onChange={(e) => onChange({ [f.key]: e.target.value })}
+            placeholder={f.placeholder}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MedicationsSection({ medications, onChange }) {
   function update(idx, patch) {
     onChange(medications.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
@@ -2681,5 +3132,180 @@ function MedicationsSection({ medications, onChange }) {
         Add Another Medication
       </button>
     </div>
+  );
+}
+
+function ConsentsTabCard({
+  records,
+  onAdd,
+  onView,
+  onEdit,
+  onShare,
+  onSign,
+  onDownload,
+  onDelete,
+  sharingEntryId,
+}) {
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return records;
+    return records.filter((r) => {
+      const fields = [
+        r.condition,
+        r.templateSnapshot?.name,
+        r.doctor,
+        r.signerName,
+        r.status,
+      ];
+      return fields
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q));
+    });
+  }, [records, search]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3 border-b">
+        <div className="relative w-full sm:max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search consents…"
+            className="h-9 pl-9 pr-9"
+          />
+          {search ? (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+        <Button size="sm" onClick={onAdd}>
+          <Plus className="size-3.5" /> New consent
+        </Button>
+      </CardHeader>
+      <CardContent className="p-0">
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <FileSignature className="size-5" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">No consent forms yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Generate a consent, share the link via WhatsApp or have the
+                patient sign on this device.
+              </p>
+            </div>
+            <Button size="sm" onClick={onAdd}>
+              <Plus className="size-3.5" /> New consent
+            </Button>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Doctor</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((r) => {
+                const status = r.status || 'draft';
+                const isSigned = status === 'signed';
+                const sharing = sharingEntryId === r._id;
+                return (
+                  <TableRow
+                    key={r._id}
+                    onClick={() => onView(r)}
+                    className="cursor-pointer"
+                  >
+                    <TableCell>
+                      <div className="font-medium">
+                        {r.condition || r.templateSnapshot?.name || 'Consent'}
+                      </div>
+                      {r.signerName ? (
+                        <div className="text-[11px] text-muted-foreground">
+                          Signed by {r.signerName}
+                          {r.signerRelation === 'guardian' ? ' (guardian)' : ''}
+                        </div>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="text-sm">{r.doctor || '—'}</TableCell>
+                    <TableCell>
+                      <span
+                        className={cn(
+                          'inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium',
+                          CONSENT_STATUS_CLASS[status] || CONSENT_STATUS_CLASS.draft,
+                        )}
+                      >
+                        {CONSENT_STATUS_LABEL[status] || status}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm">{formatDate(r.date)}</TableCell>
+                    <TableCell
+                      className="text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => onView(r)}>
+                            <Eye className="size-3.5" /> View
+                          </DropdownMenuItem>
+                          {!isSigned ? (
+                            <DropdownMenuItem onClick={() => onEdit(r)}>
+                              <Pencil className="size-3.5" /> Edit
+                            </DropdownMenuItem>
+                          ) : null}
+                          {!isSigned ? (
+                            <DropdownMenuItem
+                              onClick={() => onShare(r)}
+                              disabled={sharing}
+                            >
+                              <Share2 className="size-3.5" />{' '}
+                              {sharing ? 'Sending…' : 'Share via WhatsApp'}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {!isSigned ? (
+                            <DropdownMenuItem onClick={() => onSign(r)}>
+                              <PenLine className="size-3.5" /> Sign on this device
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuItem onClick={() => onDownload(r)}>
+                            <Download className="size-3.5" /> Download PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => onDelete(r)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="size-3.5" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }

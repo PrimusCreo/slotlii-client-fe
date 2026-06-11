@@ -24,7 +24,14 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       const isLoginRequest = error.config?.url?.includes('/auth/login');
-      if (!isLoginRequest) {
+      // Don't bounce visitors who are on a public page (e.g. the patient
+      // signing a consent link). Those pages must remain reachable even if
+      // there's a stale token in localStorage from a previous session on
+      // the same device.
+      const onPublicPage =
+        typeof window !== 'undefined' &&
+        /^\/sign\//.test(window.location.pathname);
+      if (!isLoginRequest && !onPublicPage) {
         localStorage.removeItem('slotlii_client_token');
         window.location.href = '/login';
       }
@@ -105,5 +112,40 @@ export const getDashboardStats = (params) =>
 // ── Medicines (autocomplete) ────────────────────────────
 export const searchMedicines = (q, limit = 10, opts = {}) =>
   api.get('/medicines/autocomplete', { params: { q, limit }, ...opts });
+
+// ── Consent templates ───────────────────────────────────
+export const getConsentTemplates = (params) =>
+  api.get('/consent-templates', { params });
+export const getConsentTemplate = (id) => api.get(`/consent-templates/${id}`);
+export const createConsentTemplate = (data) =>
+  api.post('/consent-templates', data);
+export const updateConsentTemplate = (id, data) =>
+  api.patch(`/consent-templates/${id}`, data);
+export const deleteConsentTemplate = (id) =>
+  api.delete(`/consent-templates/${id}`);
+
+// ── Patient consents ────────────────────────────────────
+export const createPatientConsent = (patientId, data) =>
+  api.post(`/patients/${patientId}/consents`, data);
+export const updatePatientConsent = (patientId, entryId, data) =>
+  api.patch(`/patients/${patientId}/consents/${entryId}`, data);
+export const sharePatientConsentViaWhatsApp = (patientId, entryId) =>
+  api.post(`/patients/${patientId}/consents/${entryId}/share-whatsapp`);
+export const signPatientConsentStaff = (patientId, entryId, data) =>
+  api.post(`/patients/${patientId}/consents/${entryId}/sign-staff`, data);
+export const downloadPatientConsentPdfUrl = (patientId, entryId) =>
+  `${API_BASE_URL}/patients/${patientId}/consents/${entryId}/pdf`;
+
+// ── Public consent signing (no auth) ────────────────────
+// We build a dedicated axios instance so the global JWT interceptor /
+// 401-redirect logic don't interfere with the public flow.
+const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+  headers: { 'Content-Type': 'application/json' },
+});
+export const getPublicConsent = (token) =>
+  publicApi.get(`/public/consents/${token}`);
+export const signPublicConsent = (token, data) =>
+  publicApi.post(`/public/consents/${token}/sign`, data);
 
 export default api;

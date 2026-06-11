@@ -20,6 +20,7 @@ import PatientDetail from './pages/PatientDetail';
 import Doctors from './pages/Doctors';
 import DoctorDetail from './pages/DoctorDetail';
 import Settings from './pages/Settings';
+import PublicConsentSign from './pages/PublicConsentSign';
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
                 <Route path="/signup" element={<Signup />} />
                 <Route path="/verify-email" element={<VerifyEmail />} />
                 <Route path="/set-password" element={<VerifyEmail />} />
+                <Route path="/sign/consent/:token" element={<PublicConsentSign />} />
                 <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/appointments" element={<ProtectedRoute><Appointments /></ProtectedRoute>} />

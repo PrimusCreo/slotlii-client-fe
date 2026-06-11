@@ -36,6 +36,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ConsentTemplatesManager } from '../components/consents/ConsentTemplatesManager';
 
 const FB_CONFIG_ID = import.meta.env.VITE_FACEBOOK_CONFIG_ID;
 const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
@@ -371,6 +372,10 @@ export default function Settings() {
             )}
           </CardContent>
         </Card>
+
+        {selectedClinicId ? (
+          <ConsentTemplatesManager clinicId={selectedClinicId} />
+        ) : null}
       </div>
 
       <RegisterNumberDialog
