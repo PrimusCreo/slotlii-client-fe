@@ -21,14 +21,21 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 
-import { extractPlaceholders } from '@/utils/consentMarkdown';
+import {
+  extractHtmlVariableKeys,
+  extractPlaceholders,
+} from '@/utils/consentMarkdown';
 
 // Placeholders the system fills in automatically — staff doesn't see them.
 const AUTO_PLACEHOLDERS = new Set([
   'patientName',
+  'patientAge',
+  'address',
   'clinicName',
   'doctorName',
   'date',
+  'place',
+  'time',
 ]);
 
 function humanizePlaceholder(key) {
@@ -81,7 +88,13 @@ function buildAutoDefaults({ patient, clinic, doctorName }) {
 function deriveFields(template) {
   if (!template) return [];
 
-  const fromBody = extractPlaceholders(template.bodyMarkdown || '').filter(
+  // Pull body-level placeholders from either the rich-text body (preferred)
+  // or the legacy markdown column so the modal can still render inputs for
+  // ad-hoc tokens that staff dropped into the body without declaring as
+  // structured fields.
+  const fromHtml = extractHtmlVariableKeys(template.bodyHtml || '');
+  const fromMd = extractPlaceholders(template.bodyMarkdown || '');
+  const fromBody = (fromHtml.length > 0 ? fromHtml : fromMd).filter(
     (k) => !AUTO_PLACEHOLDERS.has(k),
   );
 

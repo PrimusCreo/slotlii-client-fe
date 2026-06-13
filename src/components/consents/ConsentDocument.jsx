@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Heart, Phone } from 'lucide-react';
 
 import {
+  fillHtmlVariables,
   fillPlaceholders,
   markdownToHtml,
 } from '@/utils/consentMarkdown';
@@ -103,7 +104,11 @@ export function ConsentDocument({ consent, patient, clinic, doctor }) {
   const snap = consent.templateSnapshot || {};
   const filled = consent.filledValues || {};
   const title = fillPlaceholders(snap.title || snap.name || 'Consent Form', filled);
-  const bodyHtml = markdownToHtml(fillPlaceholders(snap.bodyMarkdown || '', filled));
+  // Prefer the rich-text body authored in the visual editor; fall back to the
+  // legacy markdown column for older snapshots.
+  const bodyHtml = snap.bodyHtml
+    ? fillHtmlVariables(snap.bodyHtml, filled)
+    : markdownToHtml(fillPlaceholders(snap.bodyMarkdown || '', filled));
 
   const clinicName = clinic?.name || 'Clinic';
   const clinicAddress = clinic?.address;

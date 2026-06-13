@@ -54,6 +54,51 @@ export function extractPlaceholders(body) {
   return out;
 }
 
+/**
+ * Returns deduped, order-preserving variable keys extracted from a stored
+ * `bodyHtml` (the rich-text editor output). Mirrors the server helper so
+ * the two stay in lock-step.
+ */
+export function extractHtmlVariableKeys(html) {
+  if (!html) return [];
+  const re = /<span\b[^>]*\bdata-variable\s*=\s*"([\w.-]+)"[^>]*>[\s\S]*?<\/span>/gi;
+  const seen = new Set();
+  const out = [];
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const k = m[1];
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(k);
+    }
+  }
+  return out;
+}
+
+/**
+ * Replace `<span data-variable="key">…</span>` chips in a rich-text body
+ * with the filled value wrapped in `<strong>`. Used by the on-screen
+ * consent document. Empty values render as a placeholder line so the
+ * document layout stays visually consistent before signing.
+ */
+export function fillHtmlVariables(html, values) {
+  if (!html) return '';
+  const get = (k) => {
+    if (!values) return '';
+    if (values instanceof Map) return values.get(k) || '';
+    return values[k] || '';
+  };
+  return String(html).replace(
+    /<span\b[^>]*\bdata-variable\s*=\s*"([\w.-]+)"[^>]*>[\s\S]*?<\/span>/gi,
+    (_m, key) => {
+      const v = get(key);
+      const text = v === undefined || v === null ? '' : String(v);
+      if (!text) return '<strong>__________</strong>';
+      return `<strong>${escapeHtml(text)}</strong>`;
+    },
+  );
+}
+
 /** Render the supported subset of Markdown to safe HTML. */
 export function markdownToHtml(markdown) {
   if (!markdown) return '';

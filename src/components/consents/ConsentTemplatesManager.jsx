@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FileSignature,
   Loader2,
@@ -30,21 +30,26 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
+
+import { ConsentRichEditor } from './editor/ConsentRichEditor';
+import { VariablesPanel } from './editor/VariablesPanel';
+import { extractHtmlVariableKeys } from '@/utils/consentMarkdown';
 
 const emptyForm = {
   name: '',
   title: '',
-  bodyMarkdown: '',
+  bodyHtml: '',
+  fields: [],
   requiresGuardian: false,
 };
 
 /**
  * Settings panel for managing reusable consent templates.
  *
- * Supports the small set of operations clinics actually need: create, edit,
- * toggle active and (soft) delete. Templates are pre-seeded the first time
- * the list is fetched, so this card is non-empty out of the box.
+ * Editing happens in a wide dialog with a two-pane layout:
+ *   • Left: WYSIWYG body editor with an inline "Insert variable" dropdown.
+ *   • Right: VariablesPanel listing the fields a staff member fills in
+ *     when creating a consent from this template.
  */
 export function ConsentTemplatesManager({ clinicId }) {
   const [templates, setTemplates] = useState([]);
@@ -53,6 +58,8 @@ export function ConsentTemplatesManager({ clinicId }) {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
+  const [openAddVariable, setOpenAddVariable] = useState(false);
+  const editorRef = useRef(null);
 
   useEffect(() => {
     if (!clinicId) return;
@@ -86,9 +93,18 @@ export function ConsentTemplatesManager({ clinicId }) {
     setForm({
       name: tpl.name || '',
       title: tpl.title || '',
-      bodyMarkdown: tpl.bodyMarkdown || '',
+      bodyHtml: tpl.bodyHtml || '',
+      fields: Array.isArray(tpl.fields) ? tpl.fields : [],
       requiresGuardian: !!tpl.requiresGuardian,
     });
+  }
+
+  const handleEditorChange = useCallback((html) => {
+    setForm((f) => (f.bodyHtml === html ? f : { ...f, bodyHtml: html }));
+  }, []);
+
+  function handleVariablesChange(next) {
+    setForm((f) => ({ ...f, fields: next }));
   }
 
   async function handleSave(e) {
@@ -98,22 +114,37 @@ export function ConsentTemplatesManager({ clinicId }) {
       return;
     }
     setSaving(true);
+    // Reconcile fields[] with the variable chips actually present in the
+    // body. Any chip whose key isn't declared as a field becomes a default
+    // text field so the consent-create modal can prompt for it.
+    const usedKeys = extractHtmlVariableKeys(form.bodyHtml);
+    const declared = new Map(
+      (form.fields || []).map((f) => [f.key, f]),
+    );
+    for (const k of usedKeys) {
+      if (!declared.has(k)) {
+        declared.set(k, { key: k, label: humanize(k), type: 'text' });
+      }
+    }
+    const payload = {
+      name: form.name.trim(),
+      title: form.title.trim(),
+      bodyHtml: form.bodyHtml,
+      // Keep legacy column blank so the renderer picks the HTML path.
+      bodyMarkdown: '',
+      fields: Array.from(declared.values()),
+      requiresGuardian: form.requiresGuardian,
+    };
     try {
       if (editing === 'new') {
         const res = await api.createConsentTemplate({
           clinicId,
-          ...form,
-          name: form.name.trim(),
-          title: form.title.trim(),
+          ...payload,
         });
         setTemplates((list) => [res.data.data, ...list]);
         toast.success('Template created');
       } else {
-        const res = await api.updateConsentTemplate(editing._id, {
-          ...form,
-          name: form.name.trim(),
-          title: form.title.trim(),
-        });
+        const res = await api.updateConsentTemplate(editing._id, payload);
         setTemplates((list) =>
           list.map((t) => (t._id === res.data.data._id ? res.data.data : t)),
         );
@@ -171,11 +202,12 @@ export function ConsentTemplatesManager({ clinicId }) {
             Consent templates
           </CardTitle>
           <CardDescription>
-            Reusable forms staff can pick when generating a consent. Use{' '}
-            <code>{'{{placeholder}}'}</code> for fields like{' '}
-            <code>{'{{tooth}}'}</code> — the system also fills in{' '}
-            <code>{'{{patientName}}'}</code>, <code>{'{{clinicName}}'}</code>,
-            <code>{'{{doctorName}}'}</code> automatically.
+            Write the consent text in a normal editor and click{' '}
+            <span className="font-medium">Insert variable</span> to add fields
+            like <span className="font-medium">procedure type</span>,{' '}
+            <span className="font-medium">place</span> or{' '}
+            <span className="font-medium">time</span>. Staff fills the
+            variables when creating a consent on a patient.
           </CardDescription>
         </div>
         <Button size="sm" onClick={openCreate}>
@@ -262,14 +294,15 @@ export function ConsentTemplatesManager({ clinicId }) {
         open={!!editing}
         onOpenChange={(o) => !o && !saving && setEditing(null)}
       >
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-[min(1100px,95vw)]">
           <DialogHeader>
             <DialogTitle>
               {editing === 'new' ? 'New consent template' : 'Edit template'}
             </DialogTitle>
             <DialogDescription>
-              Use Markdown for headings, **bold**, *italic*, lists and{' '}
-              <code>{'{{placeholders}}'}</code>.
+              Type the consent body on the left. Insert variables from the
+              toolbar — they'll show up as fillable inputs when staff creates
+              this consent for a patient.
             </DialogDescription>
           </DialogHeader>
 
@@ -300,18 +333,43 @@ export function ConsentTemplatesManager({ clinicId }) {
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="ct-body">Body (Markdown)</Label>
-              <Textarea
-                id="ct-body"
-                rows={14}
-                value={form.bodyMarkdown}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, bodyMarkdown: e.target.value }))
-                }
-                placeholder={'## What I understand\n- ...\n\n## I agree that\n1. ...'}
-                className="font-mono text-xs"
-              />
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="space-y-1.5">
+                <Label>Body</Label>
+                <ConsentRichEditor
+                  value={form.bodyHtml}
+                  onChange={handleEditorChange}
+                  variables={form.fields}
+                  onAddNewVariable={() => setOpenAddVariable(true)}
+                  onReady={(ed) => {
+                    editorRef.current = ed;
+                  }}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Patient name, age, address, clinic and doctor are filled in
+                  automatically — you don't need to add them as variables.
+                </p>
+              </div>
+              <div className="lg:max-h-[480px]">
+                <VariablesPanel
+                  variables={form.fields}
+                  onChange={handleVariablesChange}
+                  openAddForm={openAddVariable}
+                  onAddFormToggled={() => setOpenAddVariable(false)}
+                  onInsertExisting={(v) => {
+                    const ed = editorRef.current;
+                    if (!ed) return;
+                    ed
+                      .chain()
+                      .focus()
+                      .insertVariable({
+                        varKey: v.key,
+                        label: v.label || v.key,
+                      })
+                      .run();
+                  }}
+                />
+              </div>
             </div>
 
             <div className="flex items-center justify-between rounded-md border p-3">
@@ -356,4 +414,13 @@ export function ConsentTemplatesManager({ clinicId }) {
       </Dialog>
     </Card>
   );
+}
+
+function humanize(key) {
+  return String(key || '')
+    .replace(/[_-]/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
 }
