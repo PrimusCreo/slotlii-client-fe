@@ -22,14 +22,6 @@ const STATUS_COLORS = {
   CANCELLED: '#b91c1c',
 };
 
-const STATUS_LABEL = {
-  DRAFT: 'DRAFT',
-  UNPAID: 'UNPAID',
-  PARTIALLY_PAID: 'PART-PAID',
-  PAID: 'PAID',
-  CANCELLED: 'CANCELLED',
-};
-
 const DOC_FONT_FAMILY =
   "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial";
 
@@ -186,31 +178,22 @@ function BillToBlock({ patient }) {
   );
 }
 
-function StatusPillBlock({ status, doctor }) {
-  const color = STATUS_COLORS[status] || TEXT_MUTED;
+function DoctorBlock({ doctor }) {
+  if (!doctor?.name) return <div />;
   return (
-    <div>
+    <div className="text-right">
       <div
-        className="rounded-md px-4 py-2 text-center text-[13px] font-bold tracking-widest"
-        style={{
-          color,
-          backgroundColor: `${color}1A`,
-          border: `1px solid ${color}`,
-        }}
+        className="text-[10.5px] font-semibold uppercase tracking-wider"
+        style={{ color: TEXT_MUTED }}
       >
-        {STATUS_LABEL[status] || status || 'DRAFT'}
+        Doctor
       </div>
-      {doctor?.name ? (
-        <div className="mt-2 text-right">
-          <div
-            className="text-[10.5px] font-semibold uppercase tracking-wider"
-            style={{ color: TEXT_MUTED }}
-          >
-            Doctor
-          </div>
-          <div className="mt-0.5 text-[12px]" style={{ color: TEXT }}>
-            {doctor.name}
-          </div>
+      <div className="mt-0.5 text-[13px] font-semibold" style={{ color: TEXT }}>
+        {doctor.name}
+      </div>
+      {doctor.specialization ? (
+        <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+          {doctor.specialization}
         </div>
       ) : null}
     </div>
@@ -397,7 +380,7 @@ export function BillDocument({
       node: (
         <div className="grid grid-cols-[1.4fr_1fr] gap-6">
           <BillToBlock patient={patient} />
-          <StatusPillBlock status={status} doctor={doctor} />
+          <DoctorBlock doctor={doctor} />
         </div>
       ),
     },

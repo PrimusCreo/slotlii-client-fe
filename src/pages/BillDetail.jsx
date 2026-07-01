@@ -113,7 +113,7 @@ export default function BillDetail() {
       .then((res) => {
         if (!cancelled) setClinicSnapshot(res.data?.data || null);
       })
-      .catch(() => {});
+      .catch(() => { });
     const doctorId =
       typeof bill.doctorId === 'string' ? bill.doctorId : bill.doctorId?._id;
     if (doctorId) {
@@ -122,7 +122,7 @@ export default function BillDetail() {
         .then((res) => {
           if (!cancelled) setDoctorSnapshot(res.data?.data || null);
         })
-        .catch(() => {});
+        .catch(() => { });
     }
     return () => {
       cancelled = true;
@@ -161,7 +161,7 @@ export default function BillDetail() {
       .then((res) => {
         if (!cancelled) setTreatments(res.data?.data || []);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       cancelled = true;
     };
@@ -572,12 +572,12 @@ export default function BillDetail() {
                 bill={
                   editing
                     ? {
-                        ...bill,
-                        subtotal: draftTotals.subtotal,
-                        discountAmount: draftTotals.discountAmount,
-                        totalAmount: draftTotals.totalAmount,
-                        discount: draft?.discount,
-                      }
+                      ...bill,
+                      subtotal: draftTotals.subtotal,
+                      discountAmount: draftTotals.discountAmount,
+                      totalAmount: draftTotals.totalAmount,
+                      discount: draft?.discount,
+                    }
                     : bill
                 }
                 editing={editing}

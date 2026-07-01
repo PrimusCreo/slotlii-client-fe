@@ -94,13 +94,13 @@ export function PaginatedDocument({
     const headerReserve = letterheadHeaderUrl
       ? Math.ceil(LETTERHEAD_RESERVE_HEIGHT)
       : Math.ceil(
-          fallbackHeaderRef.current?.getBoundingClientRect().height || 0,
-        );
+        fallbackHeaderRef.current?.getBoundingClientRect().height || 0,
+      );
     const footerReserve = letterheadFooterUrl
       ? Math.ceil(LETTERHEAD_RESERVE_HEIGHT)
       : Math.ceil(
-          fallbackFooterRef.current?.getBoundingClientRect().height || 0,
-        );
+        fallbackFooterRef.current?.getBoundingClientRect().height || 0,
+      );
 
     const contentMax =
       PAGE_HEIGHT -
@@ -194,21 +194,21 @@ export function PaginatedDocument({
 
       {pages
         ? pages.map((indices, pi) => (
-            <PageFrame
-              key={pi}
-              pageIndex={pi}
-              pageCount={pages.length}
-              mode={mode}
-              letterheadHeaderUrl={letterheadHeaderUrl}
-              letterheadFooterUrl={letterheadFooterUrl}
-              renderFallbackHeader={renderFallbackHeader}
-              renderFallbackFooter={renderFallbackFooter}
-            >
-              {indices.map((idx) => (
-                <div key={blocks[idx].id}>{blocks[idx].node}</div>
-              ))}
-            </PageFrame>
-          ))
+          <PageFrame
+            key={pi}
+            pageIndex={pi}
+            pageCount={pages.length}
+            mode={mode}
+            letterheadHeaderUrl={letterheadHeaderUrl}
+            letterheadFooterUrl={letterheadFooterUrl}
+            renderFallbackHeader={renderFallbackHeader}
+            renderFallbackFooter={renderFallbackFooter}
+          >
+            {indices.map((idx) => (
+              <div key={blocks[idx].id}>{blocks[idx].node}</div>
+            ))}
+          </PageFrame>
+        ))
         : null}
     </div>
   );
@@ -335,11 +335,7 @@ function PageFrame({
             Page {pageIndex + 1} of {pageCount}
           </span>
           <span>
-            Generated with{' '}
-            <span aria-hidden style={{ color: '#e11d48' }}>
-              ♥
-            </span>{' '}
-            by{' '}
+            Powered by{' '}
             <span style={{ fontWeight: 600, color: '#fe6e00' }}>Slotlii</span>
           </span>
         </div>
