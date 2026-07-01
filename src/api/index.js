@@ -66,6 +66,36 @@ export const registerWhatsApp = (id, payload) =>
   api.post(`/clinics/${id}/whatsapp/register`, payload);
 export const disconnectWhatsApp = (id) =>
   api.post(`/clinics/${id}/whatsapp/disconnect`);
+export const uploadClinicLogo = (id, blob, meta = {}) => {
+  const form = new FormData();
+  const fileName = meta.fileName || 'logo.png';
+  form.append('file', blob, fileName);
+  if (meta.width) form.append('width', String(meta.width));
+  if (meta.height) form.append('height', String(meta.height));
+  return api.post(`/clinics/${id}/logo`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+export const deleteClinicLogo = (id) => api.delete(`/clinics/${id}/logo`);
+
+/**
+ * Upload a letterhead part ("header" or "footer") for a clinic. The
+ * cropper commits a fixed 794×107 PNG blob; we forward its dimensions
+ * so the backend can persist them alongside the file for reference.
+ */
+export const uploadClinicLetterhead = (id, part, blob, meta = {}) => {
+  const form = new FormData();
+  const fileName = meta.fileName || `letterhead-${part}.png`;
+  form.append('file', blob, fileName);
+  if (meta.width) form.append('width', String(meta.width));
+  if (meta.height) form.append('height', String(meta.height));
+  return api.post(`/clinics/${id}/letterhead/${part}`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const deleteClinicLetterhead = (id, part) =>
+  api.delete(`/clinics/${id}/letterhead/${part}`);
 
 // ── Appointments ────────────────────────────────────────
 export const getAppointments = (params) => api.get('/appointments', { params });
@@ -123,6 +153,31 @@ export const updateConsentTemplate = (id, data) =>
   api.patch(`/consent-templates/${id}`, data);
 export const deleteConsentTemplate = (id) =>
   api.delete(`/consent-templates/${id}`);
+
+// ── Treatments catalogue ────────────────────────────────
+export const getTreatments = (params) => api.get('/treatments', { params });
+export const getTreatment = (id) => api.get(`/treatments/${id}`);
+export const createTreatment = (data) => api.post('/treatments', data);
+export const updateTreatment = (id, data) =>
+  api.patch(`/treatments/${id}`, data);
+export const deleteTreatment = (id, params) =>
+  api.delete(`/treatments/${id}`, { params });
+
+// ── Bills / invoices ────────────────────────────────────
+export const getBills = (params) => api.get('/bills', { params });
+export const getBillsSummary = (params) =>
+  api.get('/bills/summary', { params });
+export const getBill = (id) => api.get(`/bills/${id}`);
+export const createBill = (data) => api.post('/bills', data);
+export const updateBill = (id, data) => api.patch(`/bills/${id}`, data);
+export const issueBill = (id) => api.post(`/bills/${id}/issue`);
+export const cancelBill = (id, data) => api.post(`/bills/${id}/cancel`, data);
+export const addBillPayment = (id, data) =>
+  api.post(`/bills/${id}/payments`, data);
+export const deleteBillPayment = (id, paymentId) =>
+  api.delete(`/bills/${id}/payments/${paymentId}`);
+export const deleteBill = (id) => api.delete(`/bills/${id}`);
+export const downloadBillPdfUrl = (id) => `${API_BASE_URL}/bills/${id}/pdf`;
 
 // ── Patient consents ────────────────────────────────────
 export const createPatientConsent = (patientId, data) =>

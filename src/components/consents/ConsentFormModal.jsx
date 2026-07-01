@@ -46,12 +46,12 @@ function humanizePlaceholder(key) {
     .replace(/^./, (c) => c.toUpperCase());
 }
 
-function calcAge(dob) {
-  if (!dob) return '';
-  const diff = Date.now() - new Date(dob).getTime();
-  if (Number.isNaN(diff)) return '';
-  const yrs = Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000));
-  return yrs > 0 ? String(yrs) : '';
+function ageString(patient) {
+  const raw = patient?.age;
+  if (raw === null || raw === undefined || raw === '') return '';
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return String(Math.round(n));
 }
 
 /**
@@ -72,10 +72,10 @@ function buildAutoDefaults({ patient, clinic, doctorName }) {
       hour12: false,
     }),
     subjectName: patient?.name || '',
-    subjectAge: calcAge(patient?.dateOfBirth),
+    subjectAge: ageString(patient),
     relationship: 'Self',
     address: patient?.address || '',
-    patientAge: calcAge(patient?.dateOfBirth),
+    patientAge: ageString(patient),
   };
 }
 

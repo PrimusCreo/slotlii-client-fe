@@ -20,6 +20,10 @@ import PatientDetail from './pages/PatientDetail';
 import Doctors from './pages/Doctors';
 import DoctorDetail from './pages/DoctorDetail';
 import Settings from './pages/Settings';
+import Treatments from './pages/Treatments';
+import Billing from './pages/Billing';
+import NewBill from './pages/NewBill';
+import BillDetail from './pages/BillDetail';
 import PublicConsentSign from './pages/PublicConsentSign';
 
 export default function App() {
@@ -45,6 +49,10 @@ export default function App() {
                 <Route path="/doctors" element={<ProtectedRoute><Doctors /></ProtectedRoute>} />
                 <Route path="/doctors/:id" element={<ProtectedRoute><DoctorDetail /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+                <Route path="/settings/treatments" element={<ProtectedRoute><Treatments /></ProtectedRoute>} />
+                <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
+                <Route path="/billing/new" element={<ProtectedRoute><NewBill /></ProtectedRoute>} />
+                <Route path="/billing/:id" element={<ProtectedRoute><BillDetail /></ProtectedRoute>} />
               </Routes>
             </ClinicProvider>
           </AuthProvider>

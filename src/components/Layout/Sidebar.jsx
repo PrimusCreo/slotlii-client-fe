@@ -10,6 +10,7 @@ import {
   Plus,
   LogOut,
   MessageSquarePlus,
+  Receipt,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,7 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 
 const navItems = [
@@ -47,6 +48,7 @@ const navItems = [
   { path: '/appointments/new', label: 'New booking', icon: Plus },
   { path: '/patients', label: 'Patients', icon: Users },
   { path: '/doctors', label: 'Doctors', icon: Stethoscope },
+  { path: '/billing', label: 'Billing', icon: Receipt },
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -147,6 +149,13 @@ export default function Sidebar() {
         <div className="space-y-2 p-3">
           <div className="flex items-center gap-2.5 rounded-md border border-border/60 bg-card/40 p-2.5">
             <Avatar className="size-8">
+              {selectedClinic?.logoUrl ? (
+                <AvatarImage
+                  src={selectedClinic.logoUrl}
+                  alt={selectedClinic?.name || 'Clinic logo'}
+                  className="object-cover"
+                />
+              ) : null}
               <AvatarFallback className="bg-primary/10 text-primary text-[11px] font-semibold">
                 {initials}
               </AvatarFallback>

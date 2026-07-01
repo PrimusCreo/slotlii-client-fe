@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Briefcase,
   Calendar,
+  ChevronDown,
   ClipboardList,
   Clock,
   Download,
@@ -24,6 +25,7 @@ import {
   Pill,
   Plus,
   Printer,
+  Receipt,
   Search,
   Share2,
   Stethoscope,
@@ -40,6 +42,8 @@ import { MedicineNameInput } from '@/components/prescriptions/MedicineNameInput'
 import { ConsentFormModal } from '@/components/consents/ConsentFormModal';
 import { ConsentSignDialog } from '@/components/consents/ConsentSignDialog';
 import { ConsentViewer } from '@/components/consents/ConsentViewer';
+import CHRONIC_CONDITIONS from '@/data/chronicConditions.json';
+import ALLERGIES from '@/data/allergies.json';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -60,8 +64,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -89,13 +99,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { StatusBadge } from '@/components/common/status-badge';
+import { PatientBillingPanel } from '../components/billing/PatientBillingPanel';
 
 const TABS = [
   { key: 'timeline', label: 'Timeline', icon: Activity },
-  { key: 'consultation', label: 'Consultations', icon: Stethoscope },
   { key: 'prescription', label: 'Prescriptions', icon: Pill },
   { key: 'reports', label: 'Reports', icon: ClipboardList },
   { key: 'consents', label: 'Consents', icon: FileSignature },
+  { key: 'billing', label: 'Billing', icon: Receipt },
 ];
 
 const TYPE_META = {
@@ -154,10 +165,11 @@ function formatDate(d) {
   });
 }
 
-function calcAge(dob) {
-  if (!dob) return null;
-  const diff = Date.now() - new Date(dob).getTime();
-  return Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000));
+function readAge(patient) {
+  const raw = patient?.age;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 function formatFileSize(bytes) {
@@ -255,6 +267,56 @@ function followUpDateError(value) {
   return null;
 }
 
+/**
+ * Compose the prescription's `medicalHistory` string from the structured
+ * form parts (chronic conditions, allergies, free-text note). Sub-labels
+ * are only emitted when their list is non-empty so blank rows don't
+ * clutter the printed prescription. Each labeled section lives on its
+ * own line so the PDF / preview renderers pick them up as bullets.
+ */
+function composeMedicalHistoryString({ chronic, allergies, note }) {
+  const parts = [];
+  const chronicList = (chronic || []).filter(Boolean).join(', ');
+  const allergyList = (allergies || []).filter(Boolean).join(', ');
+  if (chronicList) parts.push(`Chronic: ${chronicList}`);
+  if (allergyList) parts.push(`Allergies: ${allergyList}`);
+  const trimmedNote = (note || '').trim();
+  if (trimmedNote) parts.push(`Note: ${trimmedNote}`);
+  return parts.join('\n');
+}
+
+/**
+ * Extract just the free-text note portion out of a saved
+ * `medicalHistory` string. Returns everything after a `Note:` prefix,
+ * or the full string for legacy prescriptions that predate the
+ * structured composition (only when the string doesn't already look
+ * structured with a `Chronic:` / `Allergies:` prefix).
+ */
+function parseMedicalHistoryNote(raw) {
+  if (!raw) return '';
+  const str = String(raw);
+  const noteMatch = str.match(/(^|\n)\s*Note:\s*([\s\S]*)$/i);
+  if (noteMatch) return noteMatch[2].trim();
+  const looksStructured = /^\s*(Chronic|Allergies)\s*:/im.test(str);
+  return looksStructured ? '' : str.trim();
+}
+
+/**
+ * Whether the two string arrays hold the same items (order and casing
+ * ignored). Used to decide if we need to PATCH the patient after saving
+ * a prescription — we skip the update when nothing changed.
+ */
+function stringArraysEqual(a, b) {
+  const arrA = Array.isArray(a) ? a.filter(Boolean) : [];
+  const arrB = Array.isArray(b) ? b.filter(Boolean) : [];
+  if (arrA.length !== arrB.length) return false;
+  const setA = new Set(arrA.map((s) => String(s).toLowerCase()));
+  for (const item of arrB) {
+    if (!setA.has(String(item).toLowerCase())) return false;
+  }
+  return true;
+}
+
 const initialForm = {
   date: new Date().toISOString().slice(0, 10),
   title: '',
@@ -266,9 +328,13 @@ const initialForm = {
   reportName: '',
   files: [],
   chiefComplaint: '',
-  medicalHistory: '',
+  medicalHistoryChronic: [],
+  medicalHistoryAllergies: [],
+  medicalHistoryNote: '',
   examinationFindings: '',
   treatmentDone: '',
+  treatmentDoneItems: [],
+  treatmentAdvice: '',
   followUp: '',
 };
 
@@ -315,14 +381,23 @@ export default function PatientDetail() {
     doctor: '',
     medications: [emptyMedication()],
     chiefComplaint: '',
-    medicalHistory: '',
+    medicalHistoryChronic: [],
+    medicalHistoryAllergies: [],
+    medicalHistoryNote: '',
     examinationFindings: '',
     treatmentDone: '',
+    treatmentDoneItems: [],
+    treatmentAdvice: '',
     followUp: '',
   });
   const [savingEditPrescription, setSavingEditPrescription] = useState(false);
   const [deletingPrescriptionId, setDeletingPrescriptionId] = useState(null);
   const [sharingEntryId, setSharingEntryId] = useState(null);
+
+  // Clinic-scoped treatments catalogue — used inside the prescription form's
+  // "Treatment Done" picker. Loaded once when we know the patient's clinic.
+  const [treatments, setTreatments] = useState([]);
+  const [treatmentsLoading, setTreatmentsLoading] = useState(false);
 
   // ── Consents ─────────────────────────────────────────────
   const [consentTemplates, setConsentTemplates] = useState([]);
@@ -351,6 +426,29 @@ export default function PatientDetail() {
         if (!cancelled) setDoctors(res.data.data || []);
       } catch {
         if (!cancelled) setDoctors([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clinicId]);
+
+  useEffect(() => {
+    if (!clinicId) return;
+    let cancelled = false;
+    setTreatmentsLoading(true);
+    (async () => {
+      try {
+        const res = await api.getTreatments({
+          clinicId,
+          activeOnly: true,
+          limit: 500,
+        });
+        if (!cancelled) setTreatments(res.data?.data || []);
+      } catch {
+        if (!cancelled) setTreatments([]);
+      } finally {
+        if (!cancelled) setTreatmentsLoading(false);
       }
     })();
     return () => {
@@ -391,7 +489,59 @@ export default function PatientDetail() {
 
   function openAddModal(type) {
     setModalType(type);
-    setForm({ ...initialForm, files: [], medications: [emptyMedication()] });
+    setForm({
+      ...initialForm,
+      files: [],
+      medications: [emptyMedication()],
+      // Pre-load the medical history chips from what we know about this
+      // patient today; the doctor can add / remove for this visit and
+      // any changes are synced back to the patient record on save.
+      medicalHistoryChronic: Array.isArray(patient?.chronicConditions)
+        ? patient.chronicConditions.filter(Boolean)
+        : [],
+      medicalHistoryAllergies: Array.isArray(patient?.allergies)
+        ? patient.allergies.filter(Boolean)
+        : [],
+      medicalHistoryNote: '',
+    });
+  }
+
+  /**
+   * Push updated chronic conditions / allergies back onto the patient
+   * record when the doctor edits them from a prescription form. Skipped
+   * when nothing changed vs. the current patient so we don't spam the
+   * API with no-op writes. Failure is non-fatal — the prescription is
+   * already saved by the time we get here — so we surface a soft toast
+   * instead of blowing up the save flow.
+   */
+  async function syncPatientMedicalHistoryChips({ chronic, allergies }) {
+    if (!id || !patient) return;
+    const nextChronic = Array.isArray(chronic)
+      ? chronic.map((s) => String(s || '').trim()).filter(Boolean)
+      : [];
+    const nextAllergies = Array.isArray(allergies)
+      ? allergies.map((s) => String(s || '').trim()).filter(Boolean)
+      : [];
+    const chronicChanged = !stringArraysEqual(
+      nextChronic,
+      patient.chronicConditions || [],
+    );
+    const allergiesChanged = !stringArraysEqual(
+      nextAllergies,
+      patient.allergies || [],
+    );
+    if (!chronicChanged && !allergiesChanged) return;
+    try {
+      await api.updatePatient(id, {
+        ...(chronicChanged ? { chronicConditions: nextChronic } : {}),
+        ...(allergiesChanged ? { allergies: nextAllergies } : {}),
+      });
+    } catch (err) {
+      toast.warning(
+        err.response?.data?.error ||
+          'Prescription saved, but the patient chronic / allergy list could not be updated.',
+      );
+    }
   }
 
   async function handleSaveRecord(e) {
@@ -438,6 +588,11 @@ export default function PatientDetail() {
           setSavingRecord(false);
           return;
         }
+        const medicalHistoryString = composeMedicalHistoryString({
+          chronic: form.medicalHistoryChronic,
+          allergies: form.medicalHistoryAllergies,
+          note: form.medicalHistoryNote,
+        });
         await api.addMedicalHistory(id, {
           type: 'prescription',
           date: form.date,
@@ -446,10 +601,18 @@ export default function PatientDetail() {
           doctor: form.doctor,
           doctorId: form.doctorId || undefined,
           chiefComplaint: form.chiefComplaint,
-          medicalHistory: form.medicalHistory,
+          medicalHistory: medicalHistoryString,
           examinationFindings: form.examinationFindings,
           treatmentDone: form.treatmentDone,
+          treatmentDoneItems: sanitizeTreatmentDoneItemsForSubmit(
+            form.treatmentDoneItems,
+          ),
+          treatmentAdvice: form.treatmentAdvice,
           followUp: form.followUp,
+        });
+        await syncPatientMedicalHistoryChips({
+          chronic: form.medicalHistoryChronic,
+          allergies: form.medicalHistoryAllergies,
         });
       } else {
         const payload = {
@@ -481,9 +644,10 @@ export default function PatientDetail() {
     const v = patient.vitals || patient.latestVitals || {};
     setSummaryForm({
       name: patient.name || '',
-      dateOfBirth: patient.dateOfBirth
-        ? new Date(patient.dateOfBirth).toISOString().slice(0, 10)
-        : '',
+      age:
+        patient.age === null || patient.age === undefined || patient.age === ''
+          ? ''
+          : String(patient.age),
       gender: patient.gender || '',
       phone: patient.phone || '',
       email: patient.email || '',
@@ -510,13 +674,28 @@ export default function PatientDetail() {
     setEditingSummary(true);
   }
 
-  function addChip(field, draftKey) {
-    const value = chipDrafts[draftKey].trim();
+  function pushChip(field, rawValue) {
+    const value = (rawValue || '').trim();
     if (!value) return;
-    setSummaryForm((s) => ({
-      ...s,
-      [field]: s[field].includes(value) ? s[field] : [...s[field], value],
-    }));
+    setSummaryForm((s) => {
+      // Case-insensitive de-dupe so picking a suggestion that's already in the
+      // list (with a different casing typed by the user) doesn't duplicate it.
+      const lower = value.toLowerCase();
+      const existing = (s[field] || []).some(
+        (v) => String(v).toLowerCase() === lower,
+      );
+      if (existing) return s;
+      return { ...s, [field]: [...(s[field] || []), value] };
+    });
+  }
+
+  function addChip(field, draftKey) {
+    pushChip(field, chipDrafts[draftKey]);
+    setChipDrafts((d) => ({ ...d, [draftKey]: '' }));
+  }
+
+  function addChipValue(field, draftKey, value) {
+    pushChip(field, value);
     setChipDrafts((d) => ({ ...d, [draftKey]: '' }));
   }
 
@@ -530,7 +709,7 @@ export default function PatientDetail() {
     try {
       const payload = {
         name: summaryForm.name,
-        dateOfBirth: summaryForm.dateOfBirth || null,
+        age: summaryForm.age === '' ? null : Number(summaryForm.age),
         gender: summaryForm.gender,
         phone: summaryForm.phone,
         email: summaryForm.email,
@@ -632,9 +811,26 @@ export default function PatientDetail() {
           }))
           : [emptyMedication()],
       chiefComplaint: rx.chiefComplaint || '',
-      medicalHistory: rx.medicalHistory || '',
+      // Chips reflect the CURRENT patient chronic / allergies — the free
+      // note portion comes from what was saved on this prescription.
+      // Any edits the doctor makes here sync back to the patient on save.
+      medicalHistoryChronic: Array.isArray(patient?.chronicConditions)
+        ? patient.chronicConditions.filter(Boolean)
+        : [],
+      medicalHistoryAllergies: Array.isArray(patient?.allergies)
+        ? patient.allergies.filter(Boolean)
+        : [],
+      medicalHistoryNote: parseMedicalHistoryNote(rx.medicalHistory),
       examinationFindings: rx.examinationFindings || '',
       treatmentDone: rx.treatmentDone || rx.assessmentPlan || '',
+      treatmentDoneItems: Array.isArray(rx.treatmentDoneItems)
+        ? rx.treatmentDoneItems.map((t) => ({
+          treatmentId: t.treatmentId ? String(t.treatmentId) : '',
+          name: t.name || '',
+          note: t.note || '',
+        }))
+        : [],
+      treatmentAdvice: rx.treatmentAdvice || '',
       followUp: toDateInputValue(rx.followUp),
     });
     setEditingPrescription(rx);
@@ -667,6 +863,11 @@ export default function PatientDetail() {
     }
     setSavingEditPrescription(true);
     try {
+      const medicalHistoryString = composeMedicalHistoryString({
+        chronic: editPrescriptionForm.medicalHistoryChronic,
+        allergies: editPrescriptionForm.medicalHistoryAllergies,
+        note: editPrescriptionForm.medicalHistoryNote,
+      });
       await api.updatePatientMedicalHistory(id, editingPrescription._id, {
         date: editPrescriptionForm.date,
         condition: editPrescriptionForm.diagnosis.trim(),
@@ -674,10 +875,18 @@ export default function PatientDetail() {
         doctor: editPrescriptionForm.doctor,
         doctorId: editPrescriptionForm.doctorId || null,
         chiefComplaint: editPrescriptionForm.chiefComplaint,
-        medicalHistory: editPrescriptionForm.medicalHistory,
+        medicalHistory: medicalHistoryString,
         examinationFindings: editPrescriptionForm.examinationFindings,
         treatmentDone: editPrescriptionForm.treatmentDone,
+        treatmentDoneItems: sanitizeTreatmentDoneItemsForSubmit(
+          editPrescriptionForm.treatmentDoneItems,
+        ),
+        treatmentAdvice: editPrescriptionForm.treatmentAdvice,
         followUp: editPrescriptionForm.followUp,
+      });
+      await syncPatientMedicalHistoryChips({
+        chronic: editPrescriptionForm.medicalHistoryChronic,
+        allergies: editPrescriptionForm.medicalHistoryAllergies,
       });
       toast.success('Prescription updated');
       setEditingPrescription(null);
@@ -933,7 +1142,7 @@ export default function PatientDetail() {
     );
   }
 
-  const age = calcAge(patient.dateOfBirth);
+  const age = readAge(patient);
   const chronicConditions = patient.chronicConditions || [];
   const allergies = patient.allergies || [];
   const vitals = patient.vitals || patient.latestVitals || {};
@@ -977,11 +1186,8 @@ export default function PatientDetail() {
           </CardHeader>
           <CardContent className="space-y-5 pt-6">
             <SummarySection title="Personal information">
-              <SummaryRow icon={Calendar} label="Date of birth">
-                {patient.dateOfBirth
-                  ? `${formatDate(patient.dateOfBirth)}${age != null ? ` (${age} Y)` : ''
-                  }`
-                  : '—'}
+              <SummaryRow icon={Calendar} label="Age">
+                {age != null ? `${age} Y` : '—'}
               </SummaryRow>
               <SummaryRow icon={User} label="Gender" capitalize>
                 {patient.gender || '—'}
@@ -1124,14 +1330,6 @@ export default function PatientDetail() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="consultation" className="mt-4">
-            <RecordsTabCard
-              type="consultation"
-              records={recordsByType.consultation}
-              onAdd={() => openAddModal('consultation')}
-            />
-          </TabsContent>
-
           <TabsContent value="prescription" className="mt-4">
             <RecordsTabCard
               type="prescription"
@@ -1171,6 +1369,13 @@ export default function PatientDetail() {
               onDownload={handleDownloadConsentPdf}
               onDelete={deleteConsent}
               sharingEntryId={sharingEntryId}
+            />
+          </TabsContent>
+
+          <TabsContent value="billing" className="mt-4">
+            <PatientBillingPanel
+              clinicId={clinicId}
+              patientId={patient._id}
             />
           </TabsContent>
         </Tabs>
@@ -1235,30 +1440,6 @@ export default function PatientDetail() {
               </div>
             </div>
 
-            {modalType === 'consultation' ? (
-              <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="r-title">Reason / title *</Label>
-                  <Input
-                    id="r-title"
-                    required
-                    value={form.title}
-                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                    placeholder="e.g. Visited for fever"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="r-diag">Diagnosis</Label>
-                  <Input
-                    id="r-diag"
-                    value={form.diagnosis}
-                    onChange={(e) => setForm({ ...form, diagnosis: e.target.value })}
-                    placeholder="e.g. Viral fever"
-                  />
-                </div>
-              </>
-            ) : null}
-
             {modalType === 'prescription' ? (
               <>
                 <div className="space-y-1.5">
@@ -1282,6 +1463,8 @@ export default function PatientDetail() {
                   values={form}
                   onChange={(patch) => setForm({ ...form, ...patch })}
                   idPrefix="r"
+                  treatments={treatments}
+                  treatmentsLoading={treatmentsLoading}
                 />
 
                 <MedicationsSection
@@ -1633,10 +1816,10 @@ export default function PatientDetail() {
         doctor={
           viewingPrescription
             ? doctors.find(
-                (d) =>
-                  d._id === viewingPrescription.doctorId ||
-                  (d.name && d.name === viewingPrescription.doctor),
-              )
+              (d) =>
+                d._id === viewingPrescription.doctorId ||
+                (d.name && d.name === viewingPrescription.doctor),
+            )
             : null
         }
         onClose={() => setViewingPrescription(null)}
@@ -1735,6 +1918,8 @@ export default function PatientDetail() {
                 setEditPrescriptionForm({ ...editPrescriptionForm, ...patch })
               }
               idPrefix="ep"
+              treatments={treatments}
+              treatmentsLoading={treatmentsLoading}
             />
 
             <MedicationsSection
@@ -1805,9 +1990,10 @@ export default function PatientDetail() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field id="s-name" label="Full name *" required value={summaryForm.name}
                   onChange={(v) => setSummaryForm({ ...summaryForm, name: v })} />
-                <Field id="s-dob" label="Date of birth" type="date"
-                  value={summaryForm.dateOfBirth}
-                  onChange={(v) => setSummaryForm({ ...summaryForm, dateOfBirth: v })} />
+                <Field id="s-age" label="Age" type="number"
+                  value={summaryForm.age}
+                  onChange={(v) => setSummaryForm({ ...summaryForm, age: v })}
+                  placeholder="e.g. 35" />
                 <div className="space-y-1.5">
                   <Label htmlFor="s-gender">Gender</Label>
                   <Select
@@ -1872,9 +2058,13 @@ export default function PatientDetail() {
                 draft={chipDrafts.chronic}
                 onDraftChange={(v) => setChipDrafts({ ...chipDrafts, chronic: v })}
                 onCommit={() => addChip('chronicConditions', 'chronic')}
+                onCommitValue={(v) =>
+                  addChipValue('chronicConditions', 'chronic', v)
+                }
                 onRemove={(i) => removeChip('chronicConditions', i)}
                 placeholder="Type and press Enter (e.g. Diabetes Type 2)"
                 variant="info"
+                suggestions={CHRONIC_CONDITIONS}
               />
 
               <SectionTitle>Allergies</SectionTitle>
@@ -1883,10 +2073,12 @@ export default function PatientDetail() {
                 draft={chipDrafts.allergy}
                 onDraftChange={(v) => setChipDrafts({ ...chipDrafts, allergy: v })}
                 onCommit={() => addChip('allergies', 'allergy')}
+                onCommitValue={(v) => addChipValue('allergies', 'allergy', v)}
                 onRemove={(i) => removeChip('allergies', i)}
                 placeholder="Type and press Enter (e.g. Penicillin)"
                 variant="warning"
                 icon={AlertTriangle}
+                suggestions={ALLERGIES}
               />
 
               <SectionTitle>Latest vitals</SectionTitle>
@@ -1982,20 +2174,20 @@ export default function PatientDetail() {
         doctor={
           viewingConsent
             ? doctors.find(
-                (d) =>
-                  d._id === viewingConsent.doctorId ||
-                  (d.name && d.name === viewingConsent.doctor),
-              )
+              (d) =>
+                d._id === viewingConsent.doctorId ||
+                (d.name && d.name === viewingConsent.doctor),
+            )
             : null
         }
         onClose={() => setViewingConsent(null)}
         onEdit={
           viewingConsent && viewingConsent.status === 'draft'
             ? () => {
-                const entry = viewingConsent;
-                setViewingConsent(null);
-                openEditConsent(entry);
-              }
+              const entry = viewingConsent;
+              setViewingConsent(null);
+              openEditConsent(entry);
+            }
             : null
         }
         onShare={
@@ -2061,17 +2253,16 @@ function PrescriptionViewer({ prescription, patient, clinic, doctor, onClose, on
     >
       <style>{`
         @media print {
-          @page { size: A4; margin: 12mm; }
+          @page { size: A4; margin: 0; }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
             background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
-          /* Hide every body subtree that isn't our portal. */
           body.rx-print-mode > *:not([data-rx-portal]) { display: none !important; }
-          /* Hide chrome marked screen-only (toolbar). */
           [data-rx-screen-only] { display: none !important; }
-          /* Neutralize the overlay's layout so the sheet flows on the page. */
           [data-rx-portal] {
             position: static !important;
             inset: auto !important;
@@ -2082,33 +2273,33 @@ function PrescriptionViewer({ prescription, patient, clinic, doctor, onClose, on
             overflow: visible !important;
             padding: 0 !important;
             margin: 0 !important;
-          }
-          #rx-print-sheet {
-            position: static !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
             background: #ffffff !important;
-            width: 100% !important;
-            max-width: none !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            min-height: calc(297mm - 24mm); /* A4 height minus @page margins */
-            display: flex !important;
-            flex-direction: column !important;
           }
-          /* The PrescriptionDocument fills the available height. */
-          #rx-print-area {
-            flex: 1 1 auto !important;
-            display: flex !important;
-            flex-direction: column !important;
+          [data-rx-portal] [data-doc-container] {
+            background: #ffffff !important;
+            padding: 0 !important;
+            gap: 0 !important;
+          }
+          /* Each paginated sheet becomes exactly one printed page. */
+          [data-rx-portal] .pd-page {
             box-shadow: none !important;
-            border: none !important;
+            outline: none !important;
+            border-radius: 0 !important;
+            page-break-after: always;
+            break-after: page;
+          }
+          [data-rx-portal] .pd-page:last-of-type {
+            page-break-after: auto;
+            break-after: auto;
+          }
+          /* Hide the "Page X of Y" pill in print — the physical page
+             number tells the same story. */
+          [data-rx-portal] [data-doc-container] > .text-muted-foreground {
+            display: none !important;
           }
         }
       `}</style>
 
-      {/* Toolbar — screen only */}
       <div
         data-rx-screen-only
         className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3 shadow-sm"
@@ -2134,21 +2325,13 @@ function PrescriptionViewer({ prescription, patient, clinic, doctor, onClose, on
         </div>
       </div>
 
-      {/* Document area */}
-      <div data-rx-scroll className="flex-1 overflow-auto px-4 py-6 sm:px-8 sm:py-8">
-        <div
-          id="rx-print-sheet"
-          className="mx-auto w-full max-w-[820px] rounded-lg bg-white shadow-md ring-1 ring-zinc-200"
-        >
-          <div id="rx-print-area" className="flex flex-1 flex-col">
-            <PrescriptionDocument
-              prescription={prescription}
-              patient={patient}
-              clinic={clinic}
-              doctor={doctor}
-            />
-          </div>
-        </div>
+      <div data-rx-scroll className="flex-1 overflow-auto">
+        <PrescriptionDocument
+          prescription={prescription}
+          patient={patient}
+          clinic={clinic}
+          doctor={doctor}
+        />
       </div>
     </div>,
     document.body,
@@ -2224,36 +2407,185 @@ function Field({ id, label, type = 'text', value, onChange, placeholder, require
   );
 }
 
-function ChipInput({ items, draft, onDraftChange, onCommit, onRemove, placeholder, variant, icon: Icon }) {
+function ChipInput({
+  items,
+  draft,
+  onDraftChange,
+  onCommit,
+  onCommitValue,
+  onRemove,
+  placeholder,
+  variant,
+  icon: Icon,
+  suggestions,
+}) {
+  const hasSuggestions = Array.isArray(suggestions) && suggestions.length > 0;
+  const wrapperRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+
+  // Items the user has already added — used to hide them from the dropdown so
+  // we don't suggest things they've selected already.
+  const taken = useMemo(() => {
+    const set = new Set();
+    for (const it of items || []) set.add(String(it).toLowerCase());
+    return set;
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    if (!hasSuggestions) return [];
+    const q = (draft || '').trim().toLowerCase();
+    const matches = [];
+    const startsWith = [];
+    for (const s of suggestions) {
+      if (taken.has(String(s).toLowerCase())) continue;
+      if (!q) {
+        matches.push(s);
+        continue;
+      }
+      const lc = s.toLowerCase();
+      if (lc.startsWith(q)) startsWith.push(s);
+      else if (lc.includes(q)) matches.push(s);
+    }
+    return [...startsWith, ...matches].slice(0, 8);
+  }, [suggestions, hasSuggestions, draft, taken]);
+
+  useEffect(() => {
+    // Keep the highlighted index inside the visible range whenever the list
+    // re-filters (typing, items added, etc).
+    setActiveIdx((i) => {
+      if (filtered.length === 0) return -1;
+      if (i < 0 || i >= filtered.length) return 0;
+      return i;
+    });
+  }, [filtered]);
+
+  useEffect(() => {
+    if (!hasSuggestions) return undefined;
+    function onDocClick(e) {
+      if (!wrapperRef.current) return;
+      if (!wrapperRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [hasSuggestions]);
+
+  function pickSuggestion(value) {
+    if (!value) return;
+    if (onCommitValue) onCommitValue(value);
+    else {
+      // Fallback path when no direct commit handler is provided: stuff the
+      // value into the draft and let the regular commit pipeline run.
+      onDraftChange(value);
+      requestAnimationFrame(() => onCommit && onCommit());
+    }
+    setOpen(false);
+    setActiveIdx(-1);
+  }
+
+  function onKeyDown(e) {
+    if (open && filtered.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveIdx((i) => (i + 1) % filtered.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveIdx((i) => (i <= 0 ? filtered.length - 1 : i - 1));
+        return;
+      }
+      if (e.key === 'Enter' && activeIdx >= 0 && activeIdx < filtered.length) {
+        e.preventDefault();
+        pickSuggestion(filtered[activeIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+    }
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      onCommit && onCommit();
+    }
+  }
+
   return (
-    <div className="flex min-h-[44px] flex-wrap items-center gap-1.5 rounded-md border bg-background px-2.5 py-2 focus-within:ring-2 focus-within:ring-ring/30 focus-within:border-ring">
-      {items.map((c, i) => (
-        <Badge key={i} variant={variant || 'secondary'} className="gap-1.5 pr-1 font-normal">
-          {Icon ? <Icon className="size-3" /> : null}
-          {c}
-          <button
-            type="button"
-            onClick={() => onRemove(i)}
-            className="ml-0.5 inline-flex size-4 items-center justify-center rounded-full hover:bg-foreground/10"
-            aria-label={`Remove ${c}`}
-          >
-            <X className="size-3" />
-          </button>
-        </Badge>
-      ))}
-      <input
-        value={draft}
-        onChange={(e) => onDraftChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ',') {
-            e.preventDefault();
-            onCommit();
-          }
-        }}
-        onBlur={onCommit}
-        placeholder={placeholder}
-        className="flex-1 min-w-[160px] bg-transparent px-1 py-0.5 text-sm outline-none placeholder:text-muted-foreground"
-      />
+    <div ref={wrapperRef} className="relative">
+      <div className="flex min-h-[44px] flex-wrap items-center gap-1.5 rounded-md border bg-background px-2.5 py-2 focus-within:ring-2 focus-within:ring-ring/30 focus-within:border-ring">
+        {items.map((c, i) => (
+          <Badge key={i} variant={variant || 'secondary'} className="gap-1.5 pr-1 font-normal">
+            {Icon ? <Icon className="size-3" /> : null}
+            {c}
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="ml-0.5 inline-flex size-4 items-center justify-center rounded-full hover:bg-foreground/10"
+              aria-label={`Remove ${c}`}
+            >
+              <X className="size-3" />
+            </button>
+          </Badge>
+        ))}
+        <input
+          value={draft}
+          autoComplete="off"
+          onChange={(e) => {
+            onDraftChange(e.target.value);
+            if (hasSuggestions) setOpen(true);
+          }}
+          onFocus={() => {
+            if (hasSuggestions) setOpen(true);
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            // Don't commit free text on blur when a suggestion picker handled
+            // it (a click on a row uses mousedown + preventDefault to beat
+            // blur, but blur still fires afterwards). The commit is harmless
+            // because the draft is already cleared by the picker.
+            onCommit && onCommit();
+          }}
+          placeholder={placeholder}
+          className="flex-1 min-w-[160px] bg-transparent px-1 py-0.5 text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+
+      {hasSuggestions && open && filtered.length > 0 ? (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+        >
+          {filtered.map((s, idx) => {
+            const isActive = idx === activeIdx;
+            return (
+              <button
+                type="button"
+                key={`${s}-${idx}`}
+                role="option"
+                aria-selected={isActive}
+                onMouseEnter={() => setActiveIdx(idx)}
+                onMouseDown={(e) => {
+                  // mousedown so the pick fires before the input blurs.
+                  e.preventDefault();
+                  pickSuggestion(s);
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sm transition-colors',
+                  isActive
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-foreground hover:bg-accent/60',
+                )}
+              >
+                {Icon ? (
+                  <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                ) : null}
+                <span className="truncate">{s}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2322,7 +2654,7 @@ function TimelineView({ items }) {
                         className={cn(
                           'inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium',
                           CONSENT_STATUS_CLASS[item.consentStatus] ||
-                            CONSENT_STATUS_CLASS.draft,
+                          CONSENT_STATUS_CLASS.draft,
                         )}
                       >
                         {CONSENT_STATUS_LABEL[item.consentStatus] || item.consentStatus}
@@ -2915,19 +3247,20 @@ function PrescriptionsTable({
   );
 }
 
-function ClinicalFieldsSection({ values, onChange, idPrefix }) {
-  const fields = [
+function ClinicalFieldsSection({
+  values,
+  onChange,
+  idPrefix,
+  treatments,
+  treatmentsLoading,
+}) {
+  const textFields = [
     {
       key: 'chiefComplaint',
       label: 'Chief Complaint / Subjective',
       placeholder: 'e.g. Pain in lower left back tooth region since 2 days.',
       rows: 2,
-    },
-    {
-      key: 'medicalHistory',
-      label: 'Medical History',
-      placeholder: 'e.g. Hypertension since 10 years. No known drug allergies.',
-      rows: 2,
+      slot: 'top',
     },
     {
       key: 'examinationFindings',
@@ -2935,32 +3268,445 @@ function ClinicalFieldsSection({ values, onChange, idPrefix }) {
       placeholder:
         'One finding per line, e.g.\nFood lodgement present\nPeriapical infection wrt tooth #18\nTenderness on percussion',
       rows: 3,
-    },
-    {
-      key: 'treatmentDone',
-      label: 'Treatment Done',
-      placeholder:
-        'e.g. RCT #18 initiated.\nWorking Length — MB: 22 mm, ML: 20 mm\nIrrigation: NS',
-      rows: 3,
+      slot: 'bottom',
     },
   ];
+  const topFields = textFields.filter((f) => f.slot === 'top');
+  const bottomFields = textFields.filter((f) => f.slot === 'bottom');
+
+  function renderField(f) {
+    return (
+      <div key={f.key} className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-${f.key}`}>{f.label}</Label>
+        <Textarea
+          id={`${idPrefix}-${f.key}`}
+          rows={f.rows}
+          value={values[f.key] || ''}
+          onChange={(e) => onChange({ [f.key]: e.target.value })}
+          placeholder={f.placeholder}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3 rounded-md border bg-muted/20 p-3">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Clinical details
       </div>
-      {fields.map((f) => (
-        <div key={f.key} className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-${f.key}`}>{f.label}</Label>
-          <Textarea
-            id={`${idPrefix}-${f.key}`}
-            rows={f.rows}
-            value={values[f.key] || ''}
-            onChange={(e) => onChange({ [f.key]: e.target.value })}
-            placeholder={f.placeholder}
-          />
+      {topFields.map(renderField)}
+
+      <div className="space-y-1.5">
+        <Label>Medical History</Label>
+        <MedicalHistoryEditor
+          chronic={values.medicalHistoryChronic || []}
+          allergies={values.medicalHistoryAllergies || []}
+          note={values.medicalHistoryNote || ''}
+          onChronicChange={(next) => onChange({ medicalHistoryChronic: next })}
+          onAllergiesChange={(next) =>
+            onChange({ medicalHistoryAllergies: next })
+          }
+          onNoteChange={(next) => onChange({ medicalHistoryNote: next })}
+          idPrefix={idPrefix}
+        />
+      </div>
+
+      {bottomFields.map(renderField)}
+
+      <div className="space-y-1.5">
+        <Label>Treatment Done</Label>
+        <TreatmentDoneEditor
+          items={values.treatmentDoneItems || []}
+          onChange={(items) => onChange({ treatmentDoneItems: items })}
+          treatments={treatments || []}
+          loading={!!treatmentsLoading}
+          idPrefix={idPrefix}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-treatmentAdvice`}>Treatment Advice</Label>
+        <Textarea
+          id={`${idPrefix}-treatmentAdvice`}
+          rows={3}
+          value={values.treatmentAdvice || ''}
+          onChange={(e) => onChange({ treatmentAdvice: e.target.value })}
+          placeholder={
+            'e.g. Avoid chewing on the treated side for 24 hours.\n' +
+            'Warm saline rinses twice daily for a week.'
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Strip a `treatmentDoneItems` array down to the shape the API accepts.
+ * Empty items (no name, no note) are dropped; `treatmentId` is only kept
+ * when it's a truthy string (server re-validates as ObjectId).
+ */
+function sanitizeTreatmentDoneItemsForSubmit(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      const name = (item?.name || '').trim();
+      const note = (item?.note || '').trim();
+      if (!name && !note) return null;
+      const out = { name: name || note, note };
+      if (item?.treatmentId) out.treatmentId = String(item.treatmentId);
+      return out;
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Editor for the structured "Medical History" block on a prescription.
+ *
+ * Shows two chip inputs pre-loaded from the patient's persistent
+ * chronic conditions and allergies (with the same JSON suggestion
+ * lists used on the patient summary), plus a single combined note
+ * textarea. The chips are editable — edits on save are pushed back
+ * onto the patient record so the timeline and chart stay in sync.
+ */
+function MedicalHistoryEditor({
+  chronic,
+  allergies,
+  note,
+  onChronicChange,
+  onAllergiesChange,
+  onNoteChange,
+  idPrefix,
+}) {
+  const [chronicDraft, setChronicDraft] = useState('');
+  const [allergyDraft, setAllergyDraft] = useState('');
+
+  function commitChip(current, onChange, draft, setDraft) {
+    const value = (draft || '').trim();
+    if (!value) return;
+    const exists = (current || []).some(
+      (c) => c.toLowerCase() === value.toLowerCase(),
+    );
+    if (!exists) onChange([...(current || []), value]);
+    setDraft('');
+  }
+
+  function commitChipValue(current, onChange, value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return;
+    const exists = (current || []).some(
+      (c) => c.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (!exists) onChange([...(current || []), trimmed]);
+  }
+
+  function removeAt(current, onChange, idx) {
+    const next = [...(current || [])];
+    next.splice(idx, 1);
+    onChange(next);
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border border-dashed border-border/60 bg-background p-3">
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Chronic conditions
+        </Label>
+        <ChipInput
+          items={chronic}
+          draft={chronicDraft}
+          onDraftChange={setChronicDraft}
+          onCommit={() =>
+            commitChip(chronic, onChronicChange, chronicDraft, setChronicDraft)
+          }
+          onCommitValue={(v) => commitChipValue(chronic, onChronicChange, v)}
+          onRemove={(i) => removeAt(chronic, onChronicChange, i)}
+          placeholder="Type and press Enter (e.g. Diabetes Type 2)"
+          variant="info"
+          suggestions={CHRONIC_CONDITIONS}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Allergies
+        </Label>
+        <ChipInput
+          items={allergies}
+          draft={allergyDraft}
+          onDraftChange={setAllergyDraft}
+          onCommit={() =>
+            commitChip(
+              allergies,
+              onAllergiesChange,
+              allergyDraft,
+              setAllergyDraft,
+            )
+          }
+          onCommitValue={(v) =>
+            commitChipValue(allergies, onAllergiesChange, v)
+          }
+          onRemove={(i) => removeAt(allergies, onAllergiesChange, i)}
+          placeholder="Type and press Enter (e.g. Penicillin)"
+          variant="warning"
+          icon={AlertTriangle}
+          suggestions={ALLERGIES}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label
+          htmlFor={`${idPrefix}-medicalHistoryNote`}
+          className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+        >
+          Note
+        </Label>
+        <Textarea
+          id={`${idPrefix}-medicalHistoryNote`}
+          rows={2}
+          value={note || ''}
+          onChange={(e) => onNoteChange(e.target.value)}
+          placeholder="Anything else relevant to this visit — e.g. HbA1c 8.2, on Metformin, past dental extractions."
+        />
+      </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        Chips are pre-loaded from this patient's chart. Any add or remove
+        here also updates the patient's chronic / allergy list.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Editor for the structured "Treatment Done" block on a prescription.
+ *
+ * Each row shows the treatment name (either a catalogue item or a
+ * free-text row) plus an optional per-item note. Users pick from the
+ * clinic's Treatments catalogue via a popover, or click "Custom" to
+ * append a free-text row for one-off procedures. Selecting a catalogue
+ * item that's already picked is a no-op — duplicates are prevented so
+ * the list stays clean.
+ */
+function TreatmentDoneEditor({
+  items,
+  onChange,
+  treatments,
+  loading,
+  idPrefix,
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const selectedTreatmentIds = useMemo(
+    () => new Set(items.map((i) => i.treatmentId).filter(Boolean)),
+    [items],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return treatments;
+    return treatments.filter((t) =>
+      String(t.name || '').toLowerCase().includes(q),
+    );
+  }, [treatments, query]);
+
+  function addCatalogueItem(treatment) {
+    if (!treatment) return;
+    if (selectedTreatmentIds.has(treatment._id)) return;
+    onChange([
+      ...items,
+      { treatmentId: treatment._id, name: treatment.name || '', note: '' },
+    ]);
+  }
+
+  function addCustomRow() {
+    onChange([...items, { treatmentId: '', name: '', note: '' }]);
+  }
+
+  function updateAt(index, patch) {
+    onChange(items.map((it, i) => (i === index ? { ...it, ...patch } : it)));
+  }
+
+  function removeAt(index) {
+    onChange(items.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div className="space-y-2">
+      {items.length > 0 ? (
+        <div className="space-y-2">
+          {items.map((item, idx) => {
+            const isCustom = !item.treatmentId;
+            return (
+              <div
+                key={idx}
+                className="space-y-2 rounded-md border bg-background p-2.5"
+              >
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    {isCustom ? (
+                      <Input
+                        value={item.name}
+                        onChange={(e) =>
+                          updateAt(idx, { name: e.target.value })
+                        }
+                        placeholder="Custom treatment name"
+                        aria-label={`Treatment ${idx + 1} name`}
+                      />
+                    ) : (
+                      <div className="flex min-h-9 items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-sm">
+                        <span className="truncate font-medium">
+                          {item.name}
+                        </span>
+                        <Badge
+                          variant="secondary"
+                          className="ml-auto text-[10px] font-normal"
+                        >
+                          From catalogue
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => removeAt(idx)}
+                    aria-label={`Remove treatment ${idx + 1}`}
+                    className="mt-0.5 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+                <Input
+                  value={item.note}
+                  onChange={(e) => updateAt(idx, { note: e.target.value })}
+                  placeholder="Optional note (e.g. WL: 22 mm, irrigation: NS)"
+                  aria-label={`Treatment ${idx + 1} note`}
+                />
+              </div>
+            );
+          })}
         </div>
-      ))}
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Popover
+          open={open}
+          onOpenChange={(o) => {
+            setOpen(o);
+            if (!o) setQuery('');
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              id={`${idPrefix}-treatmentDone-picker`}
+              className={cn(
+                'inline-flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-left text-sm shadow-sm transition-colors',
+                'hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-ring/40',
+              )}
+              aria-haspopup="listbox"
+              aria-expanded={open}
+            >
+              <Plus className="size-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground">
+                {loading
+                  ? 'Loading treatments…'
+                  : treatments.length
+                    ? 'Add from catalogue'
+                    : 'No catalogue treatments'}
+              </span>
+              <ChevronDown
+                className={cn(
+                  'size-4 shrink-0 text-muted-foreground transition-transform',
+                  open && 'rotate-180',
+                )}
+              />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 p-0">
+            <div className="border-b p-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search treatments…"
+                  className="h-8 pl-8 pr-2 text-sm"
+                />
+              </div>
+            </div>
+            {loading ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                Loading…
+              </p>
+            ) : treatments.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                No treatments configured yet. Add them under{' '}
+                <span className="font-medium">Settings → Treatments</span>.
+              </p>
+            ) : filtered.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                No matches.
+              </p>
+            ) : (
+              <ul role="listbox" className="max-h-64 overflow-y-auto p-1">
+                {filtered.map((t) => {
+                  const isSelected = selectedTreatmentIds.has(t._id);
+                  return (
+                    <li key={t._id}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        disabled={isSelected}
+                        onClick={() => {
+                          addCatalogueItem(t);
+                          setOpen(false);
+                          setQuery('');
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors',
+                          isSelected
+                            ? 'cursor-not-allowed text-muted-foreground'
+                            : 'hover:bg-accent hover:text-accent-foreground',
+                        )}
+                      >
+                        <Checkbox
+                          checked={isSelected}
+                          tabIndex={-1}
+                          aria-hidden="true"
+                          className="pointer-events-none"
+                        />
+                        <span className="flex-1 truncate">{t.name}</span>
+                        {isSelected ? (
+                          <span className="text-[10px] uppercase tracking-wide">
+                            Added
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={addCustomRow}
+          className="h-9"
+        >
+          <Plus className="size-3.5" />
+          Custom
+        </Button>
+      </div>
     </div>
   );
 }

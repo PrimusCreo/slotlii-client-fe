@@ -3,12 +3,19 @@ import {
   AlertCircle,
   Building2,
   CheckCircle2,
+  FileImage,
+  ImageIcon,
   Loader2,
   MessageSquare,
   Pencil,
   Link2Off,
+  Phone,
+  Plus,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  Upload,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,6 +44,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConsentTemplatesManager } from '../components/consents/ConsentTemplatesManager';
+import { TreatmentsManager } from '../components/treatments/TreatmentsManager';
+import { LogoCropperDialog } from '../components/clinic/LogoCropperDialog';
+import { LetterheadCropperDialog } from '../components/clinic/LetterheadCropperDialog';
 
 const FB_CONFIG_ID = import.meta.env.VITE_FACEBOOK_CONFIG_ID;
 const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
@@ -44,6 +54,7 @@ const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
 const emptyProfile = {
   name: '',
   phone: '',
+  additionalPhones: [],
   address: '',
   workingHoursStart: '09:00',
   workingHoursEnd: '18:00',
@@ -55,6 +66,9 @@ function clinicToProfile(c) {
   return {
     name: c.name || '',
     phone: c.phone || '',
+    additionalPhones: Array.isArray(c.additionalPhones)
+      ? c.additionalPhones.filter(Boolean)
+      : [],
     address: c.address || '',
     workingHoursStart: c.workingHours?.start || '09:00',
     workingHoursEnd: c.workingHours?.end || '18:00',
@@ -70,6 +84,134 @@ export default function Settings() {
   const [editing, setEditing] = useState(false);
   const [profile, setProfile] = useState(emptyProfile);
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // Logo upload state: a freshly-picked file opens the cropper dialog,
+  // the cropped Blob is uploaded straight to the server.
+  const [pendingLogoFile, setPendingLogoFile] = useState(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [deletingLogo, setDeletingLogo] = useState(false);
+  const logoInputRef = useRef(null);
+
+  // Letterhead upload state — one cropper is shared for the header and
+  // footer parts, `pendingLetterheadPart` tracks which slot the picked
+  // file belongs to so the confirm handler knows where to send it.
+  const [pendingLetterheadFile, setPendingLetterheadFile] = useState(null);
+  const [pendingLetterheadPart, setPendingLetterheadPart] = useState(null);
+  const [uploadingLetterheadPart, setUploadingLetterheadPart] = useState(null);
+  const [deletingLetterheadPart, setDeletingLetterheadPart] = useState(null);
+  const letterheadHeaderInputRef = useRef(null);
+  const letterheadFooterInputRef = useRef(null);
+
+  function handleLogoFilePicked(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+      toast.error('Please choose a PNG, JPEG or WebP image.');
+    } else {
+      setPendingLogoFile(file);
+    }
+    // Reset so picking the same file twice still triggers onChange.
+    if (logoInputRef.current) logoInputRef.current.value = '';
+  }
+
+  async function handleLogoConfirm(blob, meta) {
+    if (!selectedClinicId || !blob) return;
+    setUploadingLogo(true);
+    try {
+      const res = await api.uploadClinicLogo(selectedClinicId, blob, {
+        ...meta,
+        fileName: 'logo.png',
+      });
+      setSelectedClinic(res.data.data);
+      setPendingLogoFile(null);
+      toast.success('Logo updated');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to upload logo');
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
+  async function handleLogoDelete() {
+    if (!selectedClinicId) return;
+    if (!window.confirm('Remove the current logo?')) return;
+    setDeletingLogo(true);
+    try {
+      const res = await api.deleteClinicLogo(selectedClinicId);
+      setSelectedClinic(res.data.data);
+      toast.success('Logo removed');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to remove logo');
+    } finally {
+      setDeletingLogo(false);
+    }
+  }
+
+  function handleLetterheadFilePicked(e, part) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+      toast.error('Please choose a PNG, JPEG or WebP image.');
+    } else {
+      setPendingLetterheadPart(part);
+      setPendingLetterheadFile(file);
+    }
+    // Reset so picking the same file twice still triggers onChange.
+    if (part === 'header' && letterheadHeaderInputRef.current) {
+      letterheadHeaderInputRef.current.value = '';
+    } else if (part === 'footer' && letterheadFooterInputRef.current) {
+      letterheadFooterInputRef.current.value = '';
+    }
+  }
+
+  async function handleLetterheadConfirm(blob, meta) {
+    if (!selectedClinicId || !blob || !pendingLetterheadPart) return;
+    const part = pendingLetterheadPart;
+    setUploadingLetterheadPart(part);
+    try {
+      const res = await api.uploadClinicLetterhead(
+        selectedClinicId,
+        part,
+        blob,
+        { ...meta, fileName: `letterhead-${part}.png` },
+      );
+      setSelectedClinic(res.data.data);
+      setPendingLetterheadFile(null);
+      setPendingLetterheadPart(null);
+      toast.success(
+        part === 'footer' ? 'Letterhead footer updated' : 'Letterhead header updated',
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to upload letterhead');
+    } finally {
+      setUploadingLetterheadPart(null);
+    }
+  }
+
+  async function handleLetterheadDelete(part) {
+    if (!selectedClinicId) return;
+    if (
+      !window.confirm(
+        part === 'footer'
+          ? 'Remove the letterhead footer?'
+          : 'Remove the letterhead header?',
+      )
+    ) {
+      return;
+    }
+    setDeletingLetterheadPart(part);
+    try {
+      const res = await api.deleteClinicLetterhead(selectedClinicId, part);
+      setSelectedClinic(res.data.data);
+      toast.success(
+        part === 'footer' ? 'Letterhead footer removed' : 'Letterhead header removed',
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to remove letterhead');
+    } finally {
+      setDeletingLetterheadPart(null);
+    }
+  }
 
   const [connectingWA, setConnectingWA] = useState(false);
   const [disconnectingWA, setDisconnectingWA] = useState(false);
@@ -155,7 +297,7 @@ export default function Settings() {
     if (!fbReady || !window.FB) {
       toast.error(
         fbError?.message ||
-          'Facebook SDK is still loading. Please wait a moment and try again.'
+        'Facebook SDK is still loading. Please wait a moment and try again.'
       );
       return;
     }
@@ -257,6 +399,9 @@ export default function Settings() {
       const res = await api.updateClinic(selectedClinicId, {
         name: profile.name.trim(),
         phone: profile.phone.trim() || undefined,
+        additionalPhones: (profile.additionalPhones || [])
+          .map((p) => String(p || '').trim())
+          .filter(Boolean),
         address: profile.address.trim() || undefined,
         slotDuration: parseInt(profile.slotDuration, 10),
         workingHours: {
@@ -277,6 +422,117 @@ export default function Settings() {
   return (
     <Layout title="Settings">
       <div className="grid max-w-4xl gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
+                <ImageIcon className="size-4 text-primary" />
+                Clinic logo
+              </CardTitle>
+              <CardDescription>
+                Shown in the sidebar, header and printed on every prescription,
+                consent and invoice PDF.
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-6">
+            {loading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : !selectedClinic ? (
+              <p className="text-sm text-muted-foreground">No clinic selected</p>
+            ) : (
+              <LogoUploader
+                logoUrl={selectedClinic.logoUrl}
+                onPick={() => logoInputRef.current?.click()}
+                onRemove={handleLogoDelete}
+                uploading={uploadingLogo}
+                removing={deletingLogo}
+              />
+            )}
+            <input
+              ref={logoInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={handleLogoFilePicked}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
+                <FileImage className="size-4 text-primary" />
+                Letterhead
+              </CardTitle>
+              <CardDescription>
+                Optional A4-width strips stamped on the top and bottom of
+                every prescription, bill and consent PDF. Uploading a
+                letterhead replaces the auto-generated clinic header /
+                footer on those documents.
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6 pt-6">
+            {loading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : !selectedClinic ? (
+              <p className="text-sm text-muted-foreground">No clinic selected</p>
+            ) : (
+              <>
+                <LetterheadPartRow
+                  part="header"
+                  label="Header"
+                  hint="Sits at the very top of each printed page."
+                  imageUrl={selectedClinic.letterhead?.header?.url}
+                  onPick={() => letterheadHeaderInputRef.current?.click()}
+                  onRemove={() => handleLetterheadDelete('header')}
+                  uploading={uploadingLetterheadPart === 'header'}
+                  removing={deletingLetterheadPart === 'header'}
+                  disabled={
+                    uploadingLetterheadPart !== null ||
+                    deletingLetterheadPart !== null
+                  }
+                />
+                <LetterheadPartRow
+                  part="footer"
+                  label="Footer"
+                  hint="Sits at the very bottom of each printed page."
+                  imageUrl={selectedClinic.letterhead?.footer?.url}
+                  onPick={() => letterheadFooterInputRef.current?.click()}
+                  onRemove={() => handleLetterheadDelete('footer')}
+                  uploading={uploadingLetterheadPart === 'footer'}
+                  removing={deletingLetterheadPart === 'footer'}
+                  disabled={
+                    uploadingLetterheadPart !== null ||
+                    deletingLetterheadPart !== null
+                  }
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Recommended source size 794×107 px (A4 width at 96 DPI).
+                  Anything wider is cropped to fit on upload. PNG, JPEG or
+                  WebP up to 3MB.
+                </p>
+              </>
+            )}
+            <input
+              ref={letterheadHeaderInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => handleLetterheadFilePicked(e, 'header')}
+            />
+            <input
+              ref={letterheadFooterInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => handleLetterheadFilePicked(e, 'footer')}
+            />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
             <div className="space-y-1">
@@ -374,6 +630,10 @@ export default function Settings() {
         </Card>
 
         {selectedClinicId ? (
+          <TreatmentsManager clinicId={selectedClinicId} />
+        ) : null}
+
+        {selectedClinicId ? (
           <ConsentTemplatesManager clinicId={selectedClinicId} />
         ) : null}
       </div>
@@ -385,6 +645,29 @@ export default function Settings() {
         submitting={registeringWA}
         displayPhoneNumber={wc.displayPhoneNumber}
       />
+
+      <LogoCropperDialog
+        open={!!pendingLogoFile}
+        file={pendingLogoFile}
+        saving={uploadingLogo}
+        onCancel={() => setPendingLogoFile(null)}
+        onConfirm={handleLogoConfirm}
+      />
+
+      <LetterheadCropperDialog
+        open={!!pendingLetterheadFile}
+        file={pendingLetterheadFile}
+        part={pendingLetterheadPart || 'header'}
+        saving={
+          !!pendingLetterheadPart &&
+          uploadingLetterheadPart === pendingLetterheadPart
+        }
+        onCancel={() => {
+          setPendingLetterheadFile(null);
+          setPendingLetterheadPart(null);
+        }}
+        onConfirm={handleLetterheadConfirm}
+      />
     </Layout>
   );
 }
@@ -392,6 +675,9 @@ export default function Settings() {
 // ── Clinic profile sub-components ─────────────────────────
 
 function ProfileView({ clinic }) {
+  const extras = Array.isArray(clinic.additionalPhones)
+    ? clinic.additionalPhones.filter(Boolean)
+    : [];
   return (
     <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
       <InfoItem label="Name">{clinic.name}</InfoItem>
@@ -410,6 +696,28 @@ function ProfileView({ clinic }) {
           Active
         </Badge>
       </InfoItem>
+      <div className="space-y-1 sm:col-span-2">
+        <dt className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Additional phones
+        </dt>
+        <dd className="text-sm font-medium">
+          {extras.length === 0 ? (
+            <Muted>None</Muted>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {extras.map((p) => (
+                <span
+                  key={p}
+                  className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2.5 py-0.5 text-xs font-medium"
+                >
+                  <Phone className="size-3 text-muted-foreground" />
+                  {p}
+                </span>
+              ))}
+            </div>
+          )}
+        </dd>
+      </div>
     </dl>
   );
 }
@@ -432,13 +740,16 @@ function ProfileForm({ value, onChange, onSubmit, onCancel, saving }) {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="c-phone">Phone</Label>
+          <Label htmlFor="c-phone">Primary phone</Label>
           <Input
             id="c-phone"
             value={value.phone}
             onChange={(e) => update({ phone: e.target.value })}
             placeholder="e.g. 15551234567"
           />
+          <p className="text-[11px] text-muted-foreground">
+            Bound to WhatsApp. Add extras below for reception, owner, etc.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="c-slot">Slot duration</Label>
@@ -482,6 +793,18 @@ function ProfileForm({ value, onChange, onSubmit, onCancel, saving }) {
             placeholder="Street, city, postal code"
           />
         </div>
+
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label>Additional phones</Label>
+          <PhonesEditor
+            phones={value.additionalPhones || []}
+            onChange={(next) => update({ additionalPhones: next })}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Printed alongside the primary number on prescriptions, consent
+            forms and invoices. Up to 10 additional numbers.
+          </p>
+        </div>
       </div>
 
       <div className="flex justify-end gap-2">
@@ -494,6 +817,234 @@ function ProfileForm({ value, onChange, onSubmit, onCancel, saving }) {
         </Button>
       </div>
     </form>
+  );
+}
+
+function PhonesEditor({ phones, onChange }) {
+  const MAX = 10;
+  const [draft, setDraft] = useState('');
+
+  function commitDraft() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    if (phones.length >= MAX) {
+      toast.error(`Up to ${MAX} additional phones`);
+      return;
+    }
+    if (phones.some((p) => p.toLowerCase() === trimmed.toLowerCase())) {
+      toast.error('That number is already in the list');
+      setDraft('');
+      return;
+    }
+    onChange([...phones, trimmed]);
+    setDraft('');
+  }
+
+  function remove(index) {
+    onChange(phones.filter((_, i) => i !== index));
+  }
+
+  function updateAt(index, value) {
+    onChange(phones.map((p, i) => (i === index ? value : p)));
+  }
+
+  return (
+    <div className="space-y-2">
+      {phones.length > 0 ? (
+        <div className="space-y-2">
+          {phones.map((phone, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Phone className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={phone}
+                  onChange={(e) => updateAt(idx, e.target.value)}
+                  placeholder="e.g. 9876543210"
+                  className="pl-8"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => remove(idx)}
+                aria-label="Remove phone"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Plus className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitDraft();
+              }
+            }}
+            placeholder="Add another number…"
+            disabled={phones.length >= MAX}
+            className="pl-8"
+          />
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={commitDraft}
+          disabled={!draft.trim() || phones.length >= MAX}
+        >
+          Add
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders one row of the Letterhead card — a preview of the current
+ * header / footer strip (or an empty placeholder) plus upload / remove
+ * buttons. The preview is scaled down but keeps the exact 794:107
+ * aspect ratio so the user sees a faithful representation of what will
+ * land on the printed page.
+ */
+function LetterheadPartRow({
+  part,
+  label,
+  hint,
+  imageUrl,
+  onPick,
+  onRemove,
+  uploading,
+  removing,
+  disabled,
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <span className="text-[11px] text-muted-foreground">{hint}</span>
+      </div>
+      <div
+        className="flex w-full items-center justify-center overflow-hidden rounded-md border bg-muted/30"
+        style={{ aspectRatio: '794 / 107' }}
+      >
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={`Letterhead ${part}`}
+            className="h-full w-full object-contain"
+          />
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <FileImage className="size-4" />
+            No {label.toLowerCase()} uploaded yet.
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onPick}
+          disabled={disabled}
+        >
+          {uploading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Upload className="size-4" />
+          )}
+          {imageUrl ? `Replace ${label.toLowerCase()}` : `Upload ${label.toLowerCase()}`}
+        </Button>
+        {imageUrl ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onRemove}
+            disabled={disabled}
+          >
+            {removing ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Remove
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LogoUploader({ logoUrl, onPick, onRemove, uploading, removing }) {
+  return (
+    <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+      <div
+        className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/30"
+      >
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt="Clinic logo"
+            className="size-full object-cover"
+          />
+        ) : (
+          <ImageIcon className="size-8 text-muted-foreground" />
+        )}
+      </div>
+      <div className="flex-1 space-y-2">
+        <p className="text-sm">
+          {logoUrl
+            ? 'Replace the current logo or remove it entirely.'
+            : 'Upload a square logo. A cropper opens so you can zoom and rotate before saving.'}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onPick}
+            disabled={uploading || removing}
+          >
+            {uploading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Upload className="size-4" />
+            )}
+            {logoUrl ? 'Replace logo' : 'Upload logo'}
+          </Button>
+          {logoUrl ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onRemove}
+              disabled={uploading || removing}
+            >
+              {removing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              Remove
+            </Button>
+          ) : null}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          PNG, JPEG or WebP up to 4MB. Stored as a 512×512 PNG after cropping.
+        </p>
+      </div>
+    </div>
   );
 }
 

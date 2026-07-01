@@ -8,7 +8,6 @@ import {
   CalendarX,
   CheckCircle2,
   Clock,
-  Gift,
   MessageSquare,
   Pill,
   Plus,
@@ -149,7 +148,6 @@ export default function Dashboard() {
   const topDiagnoses = data?.topDiagnoses || [];
   const topMedications = data?.topMedications || [];
   const followUpsDue = data?.followUpsDue || [];
-  const birthdays = data?.birthdays || [];
   const recentActivity = data?.recentActivity || [];
   const patientsKpi = data?.patients || {};
   const rangeTotals = data?.rangeTotals || {};
@@ -561,8 +559,8 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* ── Row 4 · Follow-ups + Birthdays ─────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* ── Row 4 · Follow-ups ─────────────────────────────── */}
+      <div className="grid gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b">
             <div>
@@ -621,55 +619,6 @@ export default function Dashboard() {
                     >
                       Book <ArrowUpRight className="size-3" />
                     </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="border-b">
-            <CardTitle>Birthdays this week</CardTitle>
-            <CardDescription>
-              Send a wish — patients with a birthday in the next 7 days.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="space-y-2 p-4">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : birthdays.length === 0 ? (
-              <EmptyState
-                icon={Gift}
-                title="No birthdays this week"
-                hint="Patient birthdays will pop up here automatically."
-              />
-            ) : (
-              <ul className="divide-y">
-                {birthdays.map((p) => (
-                  <li
-                    key={p.patientId}
-                    className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40"
-                  >
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[color:var(--status-noshow-bg)] text-[color:var(--status-noshow)]">
-                      <Gift className="size-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/patients/${p.patientId}`)}
-                        className="block truncate text-left text-sm font-medium hover:text-primary"
-                      >
-                        {p.name}
-                      </button>
-                      <div className="truncate text-xs text-muted-foreground tabular-nums">
-                        {formatDate(p.birthdayOn)} · turning {p.turning}
-                      </div>
-                    </div>
                   </li>
                 ))}
               </ul>
