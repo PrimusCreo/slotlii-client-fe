@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -104,6 +105,7 @@ function pillClass(status) {
 
 export default function CalendarPage() {
   const { selectedClinicId } = useClinic();
+  const { isScopedDoctor } = useAuth();
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [viewMode, setViewMode] = useState('month');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -255,6 +257,11 @@ export default function CalendarPage() {
 
   return (
     <Layout title="Calendar">
+      {isScopedDoctor ? (
+        <div className="mb-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          Showing your schedule only.
+        </div>
+      ) : null}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Calendar</h1>

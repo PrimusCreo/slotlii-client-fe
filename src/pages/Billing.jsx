@@ -11,8 +11,11 @@ import {
 import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
+import Can from '../components/Can';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import * as api from '../api';
+import { PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -51,6 +54,7 @@ const STATUS_FILTERS = [
 
 export default function Billing() {
   const { selectedClinicId } = useClinic();
+  const { isScopedDoctor } = useAuth();
   const navigate = useNavigate();
   const [bills, setBills] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -122,10 +126,18 @@ export default function Billing() {
             Track invoices, discounts and payments across your clinic.
           </p>
         </div>
-        <Button onClick={() => navigate('/billing/new')}>
-          <Plus className="size-4" /> New bill
-        </Button>
+        <Can permission={PERMISSIONS.BILLS_MANAGE}>
+          <Button onClick={() => navigate('/billing/new')}>
+            <Plus className="size-4" /> New bill
+          </Button>
+        </Can>
       </div>
+
+      {isScopedDoctor ? (
+        <div className="mb-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          Showing bills where you are the treating doctor.
+        </div>
+      ) : null}
 
       {/* ── Summary cards ────────────────────────────────── */}
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -224,9 +236,11 @@ export default function Billing() {
               <p className="text-xs text-muted-foreground">
                 Try changing filters or create your first bill.
               </p>
-              <Button size="sm" onClick={() => navigate('/billing/new')}>
-                <Plus className="size-3.5" /> New bill
-              </Button>
+              <Can permission={PERMISSIONS.BILLS_MANAGE}>
+                <Button size="sm" onClick={() => navigate('/billing/new')}>
+                  <Plus className="size-3.5" /> New bill
+                </Button>
+              </Can>
             </div>
           ) : (
             <Table>

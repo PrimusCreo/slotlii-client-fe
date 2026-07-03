@@ -11,12 +11,14 @@ import {
   LogOut,
   MessageSquarePlus,
   Receipt,
+  UserCog,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../../context/AuthContext';
 import { useClinic } from '../../context/ClinicContext';
 import * as api from '../../api';
+import { PERMISSIONS } from '@/lib/permissions';
 import darkLogo from '../../assets/dark-logo.png';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -41,23 +43,78 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 
+// Each nav entry lists the permission(s) required to *see* it. Items with
+// no `permission` field are always visible to any clinic user. Keep this
+// list ordered — that's the order the sidebar renders.
 const navItems = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { path: '/calendar', label: 'Calendar', icon: Calendar },
-  { path: '/appointments', label: 'Appointments', icon: CalendarCheck, end: true },
-  { path: '/appointments/new', label: 'New booking', icon: Plus },
-  { path: '/patients', label: 'Patients', icon: Users },
-  { path: '/doctors', label: 'Doctors', icon: Stethoscope },
-  { path: '/billing', label: 'Billing', icon: Receipt },
-  { path: '/settings', label: 'Settings', icon: Settings },
+  {
+    path: '/',
+    label: 'Dashboard',
+    icon: LayoutDashboard,
+    end: true,
+    permission: PERMISSIONS.DASHBOARD_VIEW,
+  },
+  {
+    path: '/calendar',
+    label: 'Calendar',
+    icon: Calendar,
+    permission: PERMISSIONS.CALENDAR_VIEW,
+  },
+  {
+    path: '/appointments',
+    label: 'Appointments',
+    icon: CalendarCheck,
+    end: true,
+    permission: PERMISSIONS.APPOINTMENTS_VIEW,
+  },
+  {
+    path: '/appointments/new',
+    label: 'New booking',
+    icon: Plus,
+    permission: PERMISSIONS.APPOINTMENTS_MANAGE,
+  },
+  {
+    path: '/patients',
+    label: 'Patients',
+    icon: Users,
+    permission: PERMISSIONS.PATIENTS_VIEW,
+  },
+  {
+    path: '/doctors',
+    label: 'Doctors',
+    icon: Stethoscope,
+    permission: PERMISSIONS.DOCTORS_VIEW,
+  },
+  {
+    path: '/billing',
+    label: 'Billing',
+    icon: Receipt,
+    permission: PERMISSIONS.BILLS_VIEW,
+  },
+  {
+    path: '/users',
+    label: 'Users',
+    icon: UserCog,
+    permission: PERMISSIONS.USERS_MANAGE,
+  },
+  {
+    path: '/settings',
+    label: 'Settings',
+    icon: Settings,
+    permission: PERMISSIONS.CLINIC_SETTINGS_MANAGE,
+  },
 ];
 
 const emptyFeedback = { category: 'general', message: '', contactEmail: '' };
 
 export default function Sidebar() {
-  const { logout, user } = useAuth();
+  const { logout, user, can } = useAuth();
   const { selectedClinic } = useClinic();
   const navigate = useNavigate();
+
+  const visibleNavItems = navItems.filter(
+    (item) => !item.permission || can(item.permission)
+  );
 
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState(emptyFeedback);
@@ -122,7 +179,7 @@ export default function Sidebar() {
             Workspace
           </div>
           <ul className="flex flex-col gap-0.5">
-            {navItems.map(({ path, label, icon: Icon, end }) => (
+            {visibleNavItems.map(({ path, label, icon: Icon, end }) => (
               <li key={path}>
                 <NavLink
                   to={path}
@@ -162,10 +219,17 @@ export default function Sidebar() {
             </Avatar>
             <div className="min-w-0 flex-1 leading-tight">
               <div className="truncate text-sm font-medium">
-                {selectedClinic?.name || 'Clinic'}
+                {user?.name || selectedClinic?.name || 'Clinic'}
               </div>
-              <div className="truncate text-[11px] text-muted-foreground">
-                {user?.email || 'Staff member'}
+              <div className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+                {user?.role ? (
+                  <span className="rounded-sm bg-primary/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary">
+                    {user.role}
+                  </span>
+                ) : null}
+                <span className="truncate">
+                  {user?.email || 'Staff member'}
+                </span>
               </div>
             </div>
           </div>

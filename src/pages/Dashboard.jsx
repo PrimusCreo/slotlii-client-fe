@@ -20,6 +20,7 @@ import {
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -114,6 +115,7 @@ function formatPercent(value) {
 
 export default function Dashboard() {
   const { selectedClinicId, selectedClinic } = useClinic();
+  const { isScopedDoctor } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -223,6 +225,12 @@ export default function Dashboard() {
       </div>
 
       <WhatsAppSetupBanner clinic={selectedClinic} onClick={() => navigate('/settings')} />
+
+      {isScopedDoctor || data?.scope?.kind === 'doctor' ? (
+        <div className="mb-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          These numbers reflect your own bookings, patients, and prescriptions only.
+        </div>
+      ) : null}
 
       {/* ── KPI cards ──────────────────────────────────────── */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

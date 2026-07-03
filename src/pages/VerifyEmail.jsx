@@ -17,15 +17,17 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import darkLogo from '../assets/dark-logo.png';
 
 /**
- * Single page that handles both ends of the email-verification flow:
+ * Single page that handles every invite-acceptance flow:
  *
- *   /verify-email?token=...  →  signup auto-verify + auto-login
- *   /set-password?token=...  →  admin invite, user picks a password,
- *                                account is created, auto-login
+ *   /verify-email?token=...   →  signup auto-verify + auto-login
+ *   /set-password?token=...   →  admin_invite: user picks a password,
+ *                                clinic account is created, auto-login
+ *   /accept-invite?token=...  →  staff_invite: user picks a password,
+ *                                staff user is created in the inviting
+ *                                clinic, auto-login
  *
- * The route mode is decided by `useLocation().pathname` so a stale token
- * sent via the wrong link still produces a sensible UI (the GET /invite
- * call returns the canonical purpose; we steer the UI from there).
+ * We use GET /invite/:token to fetch the canonical purpose and steer the
+ * UI from there, so a link opened via the wrong path still Just Works.
  */
 export default function VerifyEmail() {
   const { isAuthenticated, applyAuthPayload } = useAuth();
@@ -34,7 +36,9 @@ export default function VerifyEmail() {
   const [params] = useSearchParams();
   const token = params.get('token');
 
-  const isSetPasswordRoute = location.pathname.startsWith('/set-password');
+  const isSetPasswordRoute =
+    location.pathname.startsWith('/set-password') ||
+    location.pathname.startsWith('/accept-invite');
 
   const [status, setStatus] = useState('loading'); // loading | needs_password | verifying | success | error
   const [invite, setInvite] = useState(null);
@@ -67,8 +71,11 @@ export default function VerifyEmail() {
         const meta = data.data;
         setInvite(meta);
 
-        if (meta.purpose === 'admin_invite') {
-          // Admin invite — user must pick a password.
+        if (
+          meta.purpose === 'admin_invite' ||
+          meta.purpose === 'staff_invite'
+        ) {
+          // Both invite types require the invitee to pick a password.
           setStatus('needs_password');
           return;
         }
@@ -117,7 +124,12 @@ export default function VerifyEmail() {
     }
     setSubmitting(true);
     try {
-      const res = await api.setPassword(token, password);
+      // Both admin-invite and staff-invite end here — we dispatch to the
+      // right endpoint using the invite purpose we already fetched.
+      const res =
+        invite?.purpose === 'staff_invite'
+          ? await api.acceptStaffInvite(token, password)
+          : await api.setPassword(token, password);
       applyAuthPayload(res.data.data);
       setStatus('success');
     } catch (err) {
@@ -211,7 +223,27 @@ export default function VerifyEmail() {
                     Set your password
                   </h1>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    {invite?.clinicName ? (
+                    {invite?.purpose === 'staff_invite' ? (
+                      <>
+                        You&apos;ve been invited to join{' '}
+                        <span className="font-medium text-foreground">
+                          {invite.clinicName || 'a Slotlii clinic'}
+                        </span>
+                        {invite.role ? (
+                          <>
+                            {' '}as{' '}
+                            <span className="font-medium text-foreground">
+                              {invite.role}
+                            </span>
+                          </>
+                        ) : null}
+                        . Choose a password for{' '}
+                        <span className="font-medium text-foreground">
+                          {invite.email}
+                        </span>{' '}
+                        to accept the invite.
+                      </>
+                    ) : invite?.clinicName ? (
                       <>
                         Finish setting up{' '}
                         <span className="font-medium text-foreground">
@@ -287,6 +319,8 @@ export default function VerifyEmail() {
                   <Button type="submit" className="h-10 w-full" disabled={submitting}>
                     {submitting ? (
                       <Loader2 className="size-4 animate-spin" />
+                    ) : invite?.purpose === 'staff_invite' ? (
+                      'Accept invite'
                     ) : (
                       'Create account'
                     )}

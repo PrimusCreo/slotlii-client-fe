@@ -49,10 +49,30 @@ export const verifyEmail = (token) =>
   api.post('/auth/verify-email', { token });
 export const setPassword = (token, password) =>
   api.post('/auth/set-password', { token, password });
+export const acceptStaffInvite = (token, password) =>
+  api.post('/auth/accept-staff-invite', { token, password });
 export const getInvite = (token) => api.get(`/auth/invite/${token}`);
 export const resendVerification = (email) =>
   api.post('/auth/resend-verification', { email });
 export const getMe = () => api.get('/auth/me');
+
+// ── Users (clinic staff RBAC) ───────────────────────────
+export const getUsers = () => api.get('/users');
+export const inviteUser = (payload) => api.post('/users/invite', payload);
+export const resendUserInvite = (inviteId) =>
+  api.post(`/users/invites/${inviteId}/resend`);
+export const revokeUserInvite = (inviteId) =>
+  api.delete(`/users/invites/${inviteId}`);
+export const updateUser = (userId, payload) =>
+  api.patch(`/users/${userId}`, payload);
+export const deactivateUser = (userId) => api.delete(`/users/${userId}`);
+
+// ── Roles (permission editor) ───────────────────────────
+export const getRoles = () => api.get('/roles');
+export const updateRolePermissions = (role, permissions) =>
+  api.put(`/roles/${role}`, { permissions });
+export const resetRolePermissions = (role) =>
+  api.post(`/roles/${role}/reset`);
 
 // ── Clinics ─────────────────────────────────────────────
 export const getClinics = () => api.get('/clinics');

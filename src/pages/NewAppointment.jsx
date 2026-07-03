@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -77,6 +78,7 @@ function formatLongDate(yyyyMmDd) {
 
 export default function NewAppointment() {
   const { selectedClinicId, selectedClinic } = useClinic();
+  const { isScopedDoctor, doctorId: authDoctorId } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -117,6 +119,16 @@ export default function NewAppointment() {
     const exists = doctors.some((d) => d._id === presetDoctorId);
     if (exists) setForm((f) => ({ ...f, doctorId: presetDoctorId }));
   }, [presetDoctorId, doctors]);
+
+  // Scoped doctors book appointments only against themselves. Auto-select
+  // their own record so they don't have to pick from a dropdown.
+  useEffect(() => {
+    if (!isScopedDoctor || !authDoctorId || !doctors.length) return;
+    const exists = doctors.some((d) => d._id === authDoctorId);
+    if (exists) {
+      setForm((f) => (f.doctorId === authDoctorId ? f : { ...f, doctorId: authDoctorId }));
+    }
+  }, [isScopedDoctor, authDoctorId, doctors]);
 
   useEffect(() => {
     if (!presetPatientId || !patients.length) return;
@@ -372,13 +384,18 @@ export default function NewAppointment() {
                   <Section
                     icon={Stethoscope}
                     title="Doctor"
-                    description="Slots follow this doctor's schedule."
+                    description={
+                      isScopedDoctor
+                        ? 'Booking against your own schedule.'
+                        : "Slots follow this doctor's schedule."
+                    }
                   >
                     <Select
                       value={form.doctorId}
                       onValueChange={(v) =>
                         setForm({ ...form, doctorId: v, time: '' })
                       }
+                      disabled={isScopedDoctor}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Choose a doctor…" />
@@ -569,7 +586,11 @@ export default function NewAppointment() {
                   <Section
                     icon={Stethoscope}
                     title="Doctor"
-                    description="Optional — staff can assign a doctor later."
+                    description={
+                      isScopedDoctor
+                        ? 'Walk-in will be assigned to you.'
+                        : 'Optional — staff can assign a doctor later.'
+                    }
                   >
                     {loadingDoctors ? (
                       <Skeleton className="h-9 w-full" />
@@ -584,6 +605,7 @@ export default function NewAppointment() {
                           onValueChange={(v) =>
                             setForm({ ...form, doctorId: v })
                           }
+                          disabled={isScopedDoctor}
                         >
                           <SelectTrigger className="max-w-sm">
                             <SelectValue placeholder="Assign a doctor (optional)…" />
@@ -599,7 +621,7 @@ export default function NewAppointment() {
                             ))}
                           </SelectContent>
                         </Select>
-                        {form.doctorId ? (
+                        {form.doctorId && !isScopedDoctor ? (
                           <Button
                             type="button"
                             variant="ghost"
