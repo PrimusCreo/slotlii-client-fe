@@ -678,7 +678,40 @@ export default function Dashboard() {
 // flow lives.
 function WhatsAppSetupBanner({ clinic, onClick }) {
   if (!clinic) return null;
-  if (clinic.whatsappConfig?.phoneNumberId) return null;
+  const status = clinic.whatsappConfig?.activationStatus || 'not_activated';
+  // Active clinics don't need a nudge. Every other state benefits from
+  // a one-click bounce into Settings where the panel explains what's
+  // happening (activating, failed, suspended, disconnected).
+  if (status === 'active' || status === 'suspended') return null;
+
+  const copy = (() => {
+    switch (status) {
+      case 'activating':
+        return {
+          title: 'WhatsApp activation in progress',
+          body: 'Meta is approving your message templates. This usually takes a few minutes.',
+          cta: 'View status',
+        };
+      case 'activation_failed':
+        return {
+          title: 'WhatsApp activation failed',
+          body: 'Something went wrong during setup. Retry from Settings to pick up where we left off.',
+          cta: 'Fix now',
+        };
+      case 'disconnected':
+        return {
+          title: 'WhatsApp is disconnected',
+          body: 'Reconnect to resume appointment confirmations, reminders and reports over WhatsApp.',
+          cta: 'Reconnect',
+        };
+      default:
+        return {
+          title: 'Finish setup: connect WhatsApp',
+          body: 'Send appointment confirmations and reminders directly from your verified WhatsApp business number.',
+          cta: 'Connect WhatsApp',
+        };
+    }
+  })();
 
   return (
     <div className="mb-6 flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -687,15 +720,12 @@ function WhatsAppSetupBanner({ clinic, onClick }) {
           <MessageSquare className="size-4" />
         </div>
         <div className="min-w-0">
-          <p className="text-sm font-medium">Finish setup: connect WhatsApp</p>
-          <p className="text-xs text-muted-foreground">
-            Send appointment confirmations and reminders directly from your
-            verified WhatsApp business number.
-          </p>
+          <p className="text-sm font-medium">{copy.title}</p>
+          <p className="text-xs text-muted-foreground">{copy.body}</p>
         </div>
       </div>
       <Button size="sm" onClick={onClick}>
-        Connect WhatsApp <ArrowRight className="size-4" />
+        {copy.cta} <ArrowRight className="size-4" />
       </Button>
     </div>
   );

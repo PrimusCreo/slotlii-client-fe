@@ -12,6 +12,7 @@ import {
   MessageSquarePlus,
   Receipt,
   UserCog,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -108,13 +109,26 @@ const navItems = [
 const emptyFeedback = { category: 'general', message: '', contactEmail: '' };
 
 export default function Sidebar() {
-  const { logout, user, can } = useAuth();
+  const { logout, user, can, isPlatformAdmin } = useAuth();
   const { selectedClinic } = useClinic();
   const navigate = useNavigate();
 
-  const visibleNavItems = navItems.filter(
-    (item) => !item.permission || can(item.permission)
-  );
+  const visibleNavItems = isPlatformAdmin
+    ? []
+    : navItems.filter((item) => !item.permission || can(item.permission));
+
+  // Platform-admin-only entries. Rendered as a separate section so
+  // there's no chance of them leaking into a clinic staff sidebar.
+  const adminNavItems = isPlatformAdmin
+    ? [
+        {
+          path: '/admin/whatsapp',
+          label: 'WhatsApp fleet',
+          icon: ShieldCheck,
+          end: true,
+        },
+      ]
+    : [];
 
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState(emptyFeedback);
@@ -175,30 +189,63 @@ export default function Sidebar() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-4">
-          <div className="mb-2 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Workspace
-          </div>
-          <ul className="flex flex-col gap-0.5">
-            {visibleNavItems.map(({ path, label, icon: Icon, end }) => (
-              <li key={path}>
-                <NavLink
-                  to={path}
-                  end={end}
-                  className={({ isActive }) =>
-                    cn(
-                      'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                      'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                      isActive &&
-                        'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
-                    )
-                  }
-                >
-                  <Icon className="size-4 shrink-0" />
-                  <span>{label}</span>
-                </NavLink>
-              </li>
-            ))}
-          </ul>
+          {visibleNavItems.length > 0 ? (
+            <>
+              <div className="mb-2 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Workspace
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {visibleNavItems.map(({ path, label, icon: Icon, end }) => (
+                  <li key={path}>
+                    <NavLink
+                      to={path}
+                      end={end}
+                      className={({ isActive }) =>
+                        cn(
+                          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                          'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                          isActive &&
+                            'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
+                        )
+                      }
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span>{label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
+          {adminNavItems.length > 0 ? (
+            <>
+              <div className="mb-2 mt-4 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Platform admin
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {adminNavItems.map(({ path, label, icon: Icon, end }) => (
+                  <li key={path}>
+                    <NavLink
+                      to={path}
+                      end={end}
+                      className={({ isActive }) =>
+                        cn(
+                          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                          'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                          isActive &&
+                            'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
+                        )
+                      }
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span>{label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </nav>
 
         <Separator />

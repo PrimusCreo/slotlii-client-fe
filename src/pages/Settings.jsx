@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Building2,
   CheckCircle2,
+  Clock,
   FileImage,
   ImageIcon,
   Loader2,
@@ -11,11 +12,12 @@ import {
   Link2Off,
   Phone,
   Plus,
-  ShieldCheck,
-  Sparkles,
+  RefreshCw,
+  ShieldOff,
   Trash2,
   Upload,
   X,
+  XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,14 +34,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -215,18 +209,22 @@ export default function Settings() {
 
   const [connectingWA, setConnectingWA] = useState(false);
   const [disconnectingWA, setDisconnectingWA] = useState(false);
-  const [registerOpen, setRegisterOpen] = useState(false);
-  const [registeringWA, setRegisteringWA] = useState(false);
+  // Live status snapshot fetched from GET /clinics/:id/whatsapp/status
+  // while the clinic sits in the `activating` state. Contains template
+  // approval progress so the panel can render a useful progress bar.
+  const [waStatus, setWaStatus] = useState(null);
 
   const wc = selectedClinic?.whatsappConfig || {};
-  const waConfigured = !!(wc.phoneNumberId && wc.accessToken);
-  // Legacy connected records pre-date this field; treat missing as 'pending'
-  // so the Register button shows up for them too.
-  const waRegistered = wc.registrationStatus === 'registered';
+  const activationStatus = wc.activationStatus || 'not_activated';
 
   // Cache the phone_number_id + waba_id Meta posts during the popup flow.
   // Meta sends them via window.postMessage, separately from FB.login's `code`.
-  const signupAssetsRef = useRef({ phoneNumberId: null, wabaId: null });
+  const signupAssetsRef = useRef({
+    phoneNumberId: null,
+    wabaId: null,
+    whatsappNumber: null,
+    businessDisplayName: null,
+  });
 
   // Hydrate the editable profile whenever the clinic loads or changes.
   useEffect(() => {
@@ -235,7 +233,9 @@ export default function Settings() {
 
   // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the user
   // finishes adding their phone number inside the popup, before FB.login's
-  // callback resolves.
+  // callback resolves. We keep the phone_number_id + waba_id (and, when
+  // Meta returns them, display name + phone) so activation can pre-fill
+  // the clinic profile.
   useEffect(() => {
     function handleSignupMessage(event) {
       if (!event.origin || !event.origin.endsWith('facebook.com')) return;
@@ -247,6 +247,8 @@ export default function Settings() {
           signupAssetsRef.current = {
             phoneNumberId: data.data?.phone_number_id,
             wabaId: data.data?.waba_id,
+            whatsappNumber: data.data?.display_phone_number || null,
+            businessDisplayName: data.data?.verified_name || null,
           };
         }
       } catch {
@@ -257,9 +259,14 @@ export default function Settings() {
     return () => window.removeEventListener('message', handleSignupMessage);
   }, []);
 
-  const submitSignup = useCallback(
+  const submitActivation = useCallback(
     async (code) => {
-      const { phoneNumberId, wabaId } = signupAssetsRef.current;
+      const {
+        phoneNumberId,
+        wabaId,
+        whatsappNumber,
+        businessDisplayName,
+      } = signupAssetsRef.current;
       if (!phoneNumberId || !wabaId) {
         toast.error(
           'Onboarding finished but Meta did not return a phone number. Please try again.'
@@ -268,20 +275,29 @@ export default function Settings() {
       }
       setConnectingWA(true);
       try {
-        const res = await api.connectWhatsAppEmbeddedSignup(selectedClinicId, {
+        const res = await api.activateWhatsApp(selectedClinicId, {
           code,
           phoneNumberId,
           wabaId,
+          whatsappNumber,
+          businessDisplayName,
         });
         setSelectedClinic(res.data.data);
-        toast.success('WhatsApp connected successfully');
+        toast.success(
+          'WhatsApp activated. Templates are being submitted for approval.'
+        );
       } catch (err) {
         toast.error(
-          err.response?.data?.error || 'Failed to complete WhatsApp signup'
+          err.response?.data?.error || 'Failed to complete WhatsApp activation'
         );
       } finally {
         setConnectingWA(false);
-        signupAssetsRef.current = { phoneNumberId: null, wabaId: null };
+        signupAssetsRef.current = {
+          phoneNumberId: null,
+          wabaId: null,
+          whatsappNumber: null,
+          businessDisplayName: null,
+        };
       }
     },
     [selectedClinicId, setSelectedClinic]
@@ -302,7 +318,12 @@ export default function Settings() {
       return;
     }
 
-    signupAssetsRef.current = { phoneNumberId: null, wabaId: null };
+    signupAssetsRef.current = {
+      phoneNumberId: null,
+      wabaId: null,
+      whatsappNumber: null,
+      businessDisplayName: null,
+    };
 
     window.FB.login(
       (response) => {
@@ -313,7 +334,7 @@ export default function Settings() {
           }
           return;
         }
-        submitSignup(code);
+        submitActivation(code);
       },
       {
         config_id: FB_CONFIG_ID,
@@ -322,31 +343,6 @@ export default function Settings() {
         extras: { version: 'v4' },
       }
     );
-  }
-
-  async function handleRegister(pin) {
-    if (!selectedClinicId) return;
-    setRegisteringWA(true);
-    try {
-      const res = await api.registerWhatsApp(selectedClinicId, { pin });
-      setSelectedClinic(res.data.data);
-      setRegisterOpen(false);
-      const generated = res.data.generatedPin;
-      if (generated) {
-        toast.success(
-          `Your number is live. We generated your 2FA PIN: ${generated} — write it down.`,
-          { duration: 12000 }
-        );
-      } else {
-        toast.success('Your number is now live on WhatsApp.');
-      }
-    } catch (err) {
-      toast.error(
-        err.response?.data?.error || 'Failed to register WhatsApp number'
-      );
-    } finally {
-      setRegisteringWA(false);
-    }
   }
 
   async function handleDisconnect() {
@@ -371,6 +367,40 @@ export default function Settings() {
       setDisconnectingWA(false);
     }
   }
+
+  // While the clinic sits in `activating`, poll the status endpoint
+  // every 15s so the frontend can update template approval progress
+  // and flip to `active` without a page reload.
+  useEffect(() => {
+    if (!selectedClinicId) return undefined;
+    if (activationStatus !== 'activating') {
+      setWaStatus(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await api.getWhatsAppStatus(selectedClinicId);
+        if (cancelled) return;
+        setWaStatus(res.data.data);
+        // Server flipped us to active — refresh the clinic doc so the
+        // rest of the UI sees the new status.
+        if (res.data.data.activationStatus !== 'activating') {
+          const clinicRes = await api.getClinic(selectedClinicId);
+          if (!cancelled) setSelectedClinic(clinicRes.data.data);
+        }
+      } catch (err) {
+        // Silent on poll failure — a transient error is fine.
+      }
+    }
+    poll();
+    const handle = setInterval(poll, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [selectedClinicId, activationStatus, setSelectedClinic]);
 
   function startEdit() {
     setProfile(clinicToProfile(selectedClinic));
@@ -586,44 +616,24 @@ export default function Settings() {
                 Connect a WhatsApp number to send and receive messages.
               </CardDescription>
             </div>
-            {!waConfigured ? (
-              <Badge variant="warning" className="font-normal">
-                <AlertCircle className="size-3" /> Not connected
-              </Badge>
-            ) : waRegistered ? (
-              <Badge variant="success" className="font-normal">
-                <CheckCircle2 className="size-3" /> Connected
-              </Badge>
-            ) : (
-              <Badge variant="warning" className="font-normal">
-                <AlertCircle className="size-3" /> Pending registration
-              </Badge>
-            )}
+            <WhatsAppStatusBadge status={activationStatus} />
           </CardHeader>
 
           <CardContent className="pt-6">
             {loading ? (
               <Skeleton className="h-32 w-full" />
-            ) : !waConfigured ? (
-              <NotConnectedPanel
+            ) : (
+              <WhatsAppPanel
+                status={activationStatus}
+                wc={wc}
+                waStatus={waStatus}
                 onConnect={handleEmbeddedSignup}
+                onDisconnect={handleDisconnect}
                 connecting={connectingWA}
+                disconnecting={disconnectingWA}
                 fbReady={fbReady}
                 fbError={fbError}
                 hasConfigId={!!FB_CONFIG_ID}
-              />
-            ) : !waRegistered ? (
-              <PendingRegistrationPanel
-                wc={wc}
-                onRegister={() => setRegisterOpen(true)}
-                onDisconnect={handleDisconnect}
-                disconnecting={disconnectingWA}
-              />
-            ) : (
-              <ConnectedPanel
-                wc={wc}
-                onDisconnect={handleDisconnect}
-                disconnecting={disconnectingWA}
               />
             )}
           </CardContent>
@@ -637,14 +647,6 @@ export default function Settings() {
           <ConsentTemplatesManager clinicId={selectedClinicId} />
         ) : null}
       </div>
-
-      <RegisterNumberDialog
-        open={registerOpen}
-        onOpenChange={setRegisterOpen}
-        onSubmit={handleRegister}
-        submitting={registeringWA}
-        displayPhoneNumber={wc.displayPhoneNumber}
-      />
 
       <LogoCropperDialog
         open={!!pendingLogoFile}
@@ -1078,6 +1080,108 @@ function Muted({ children }) {
 
 // ── WhatsApp sub-components ───────────────────────────────
 
+function WhatsAppStatusBadge({ status }) {
+  switch (status) {
+    case 'active':
+      return (
+        <Badge variant="success" className="font-normal">
+          <CheckCircle2 className="size-3" /> Connected
+        </Badge>
+      );
+    case 'activating':
+      return (
+        <Badge variant="warning" className="font-normal">
+          <Clock className="size-3" /> Activating…
+        </Badge>
+      );
+    case 'activation_failed':
+      return (
+        <Badge variant="destructive" className="font-normal">
+          <XCircle className="size-3" /> Activation failed
+        </Badge>
+      );
+    case 'suspended':
+      return (
+        <Badge variant="destructive" className="font-normal">
+          <ShieldOff className="size-3" /> Suspended
+        </Badge>
+      );
+    case 'disconnected':
+      return (
+        <Badge variant="warning" className="font-normal">
+          <Link2Off className="size-3" /> Disconnected
+        </Badge>
+      );
+    default:
+      return (
+        <Badge variant="warning" className="font-normal">
+          <AlertCircle className="size-3" /> Not connected
+        </Badge>
+      );
+  }
+}
+
+function WhatsAppPanel({
+  status,
+  wc,
+  waStatus,
+  onConnect,
+  onDisconnect,
+  connecting,
+  disconnecting,
+  fbReady,
+  fbError,
+  hasConfigId,
+}) {
+  if (status === 'active') {
+    return (
+      <ConnectedPanel
+        wc={wc}
+        onDisconnect={onDisconnect}
+        disconnecting={disconnecting}
+      />
+    );
+  }
+  if (status === 'activating') {
+    return <ActivatingPanel wc={wc} waStatus={waStatus} />;
+  }
+  if (status === 'activation_failed') {
+    return (
+      <ActivationFailedPanel
+        wc={wc}
+        onRetry={onConnect}
+        retrying={connecting}
+        fbReady={fbReady}
+        fbError={fbError}
+        hasConfigId={hasConfigId}
+      />
+    );
+  }
+  if (status === 'suspended') {
+    return <SuspendedPanel wc={wc} />;
+  }
+  if (status === 'disconnected') {
+    return (
+      <DisconnectedPanel
+        onReconnect={onConnect}
+        reconnecting={connecting}
+        fbReady={fbReady}
+        fbError={fbError}
+        hasConfigId={hasConfigId}
+      />
+    );
+  }
+  return (
+    <NotConnectedPanel
+      onConnect={onConnect}
+      connecting={connecting}
+      fbReady={fbReady}
+      fbError={fbError}
+      hasConfigId={hasConfigId}
+    />
+  );
+}
+
 function NotConnectedPanel({
   onConnect,
   connecting,
@@ -1093,8 +1197,9 @@ function NotConnectedPanel({
       <div className="space-y-1">
         <p className="text-sm font-semibold">No WhatsApp number connected</p>
         <p className="max-w-sm text-xs text-muted-foreground">
-          Connect through Meta's secure flow — you'll need access to the phone
-          number you want to register for OTP.
+          Connect through Meta's secure flow. Slotlii will import your
+          WhatsApp Business Account, provision messaging, and submit
+          message templates for approval — usually done within minutes.
         </p>
       </div>
       <Button
@@ -1104,7 +1209,7 @@ function NotConnectedPanel({
       >
         {connecting ? (
           <>
-            <Loader2 className="size-4 animate-spin" /> Finishing setup…
+            <Loader2 className="size-4 animate-spin" /> Activating…
           </>
         ) : (
           <>
@@ -1133,10 +1238,10 @@ function ConnectedPanel({ wc, onDisconnect, disconnecting }) {
     <div className="space-y-4">
       <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
         <InfoItem label="Business name">
-          {wc.verifiedName || <Muted>Not set</Muted>}
+          {wc.businessDisplayName || <Muted>Not set</Muted>}
         </InfoItem>
         <InfoItem label="Phone number">
-          {wc.displayPhoneNumber || <Muted>Not set</Muted>}
+          {wc.whatsappNumber || <Muted>Not set</Muted>}
         </InfoItem>
       </dl>
 
@@ -1159,199 +1264,161 @@ function ConnectedPanel({ wc, onDisconnect, disconnecting }) {
   );
 }
 
-function PendingRegistrationPanel({
-  wc,
-  onRegister,
-  onDisconnect,
-  disconnecting,
-}) {
+function ActivatingPanel({ wc, waStatus }) {
+  const summary = waStatus?.summary || null;
+  const pct = summary && summary.total > 0
+    ? Math.round((summary.approved / summary.total) * 100)
+    : 0;
   return (
     <div className="space-y-4">
       <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
         <InfoItem label="Business name">
-          {wc.verifiedName || <Muted>Not set</Muted>}
+          {wc.businessDisplayName || <Muted>Not set</Muted>}
         </InfoItem>
         <InfoItem label="Phone number">
-          {wc.displayPhoneNumber || <Muted>Not set</Muted>}
+          {wc.whatsappNumber || <Muted>Not set</Muted>}
         </InfoItem>
       </dl>
 
       <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
-        <AlertCircle className="mt-0.5 size-4 shrink-0" />
-        <div className="space-y-1">
-          <p className="font-medium">One more step to go live</p>
+        <Clock className="mt-0.5 size-4 shrink-0" />
+        <div className="space-y-2 w-full">
+          <p className="font-medium">Setting things up on your behalf</p>
           <p className="text-xs leading-relaxed text-amber-900/80 dark:text-amber-100/80">
-            Your number is attached to your WhatsApp Business Account but
-            isn't activated on the Cloud API yet. Register it to set a 6-digit
-            security PIN and start sending and receiving messages.
+            We're provisioning your messaging sender and submitting message
+            templates to Meta for approval. Meta typically approves within
+            minutes. You can leave this page — status will update
+            automatically here and on the dashboard.
           </p>
+          {summary ? (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px] font-medium">
+                <span>Template approvals</span>
+                <span>
+                  {summary.approved} of {summary.total} approved
+                  {summary.rejected > 0 ? ` · ${summary.rejected} rejected` : ''}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-amber-200/60 dark:bg-amber-800/40">
+                <div
+                  className="h-1.5 rounded-full bg-amber-600 transition-all"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
-      </div>
-
-      <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row">
-        <Button
-          variant="outline"
-          onClick={onDisconnect}
-          disabled={disconnecting}
-          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-        >
-          {disconnecting ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Link2Off className="size-4" />
-          )}
-          {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-        </Button>
-        <Button onClick={onRegister} className="bg-[#25D366] text-white hover:bg-[#1ebe57]">
-          <ShieldCheck className="size-4" /> Register number
-        </Button>
       </div>
     </div>
   );
 }
 
-// Mirrors the server-side rules in clinicController.validateWhatsAppPin.
-// Keep these in sync — server is the source of truth, this is just to
-// give the user instant feedback without a round trip.
-function validatePinLocal(pin) {
-  if (!/^\d{6}$/.test(pin)) return 'PIN must be exactly 6 digits';
-  if (/^(\d)\1{5}$/.test(pin)) return 'PIN cannot be all the same digit';
-  const digits = pin.split('').map(Number);
-  const asc = digits.every((d, i) => i === 0 || d === digits[i - 1] + 1);
-  const desc = digits.every((d, i) => i === 0 || d === digits[i - 1] - 1);
-  if (asc || desc) return 'PIN cannot be a simple sequence';
-  return null;
-}
-
-function generateRandomPin() {
-  for (let i = 0; i < 50; i += 1) {
-    const pin = String(Math.floor(100000 + Math.random() * 900000));
-    if (!validatePinLocal(pin)) return pin;
-  }
-  return '482937';
-}
-
-function RegisterNumberDialog({
-  open,
-  onOpenChange,
-  onSubmit,
-  submitting,
-  displayPhoneNumber,
+function ActivationFailedPanel({
+  wc,
+  onRetry,
+  retrying,
+  fbReady,
+  fbError,
+  hasConfigId,
 }) {
-  const [pin, setPin] = useState('');
-  const [error, setError] = useState(null);
-  const [autoGenerate, setAutoGenerate] = useState(true);
-
-  // Reset state every time the dialog opens.
-  useEffect(() => {
-    if (open) {
-      setPin('');
-      setError(null);
-      setAutoGenerate(true);
-    }
-  }, [open]);
-
-  function handleAutofill() {
-    setAutoGenerate(false);
-    setPin(generateRandomPin());
-    setError(null);
-  }
-
-  function handlePinChange(e) {
-    setAutoGenerate(false);
-    const next = e.target.value.replace(/\D/g, '').slice(0, 6);
-    setPin(next);
-    setError(null);
-  }
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    if (autoGenerate) {
-      onSubmit(undefined);
-      return;
-    }
-    const validationError = validatePinLocal(pin);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-    onSubmit(pin);
-  }
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="size-5 text-[#25D366]" />
-            Register your WhatsApp number
-          </DialogTitle>
-          <DialogDescription>
-            Activates {displayPhoneNumber || 'your number'} on WhatsApp Cloud
-            API and sets a 6-digit two-step verification PIN. You'll need this
-            PIN if you ever move the number to a different platform.
-          </DialogDescription>
-        </DialogHeader>
+    <div className="space-y-4">
+      <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+        <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="space-y-1">
+          <p className="font-medium">Activation failed</p>
+          <p className="text-xs leading-relaxed text-destructive/90">
+            {wc.activationError ||
+              'Something went wrong while activating WhatsApp. Try again — we will pick up where we left off.'}
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          onClick={onRetry}
+          disabled={retrying || !fbReady || !hasConfigId}
+          className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
+        >
+          {retrying ? (
+            <>
+              <Loader2 className="size-4 animate-spin" /> Retrying…
+            </>
+          ) : (
+            <>
+              <RefreshCw className="size-4" /> Retry activation
+            </>
+          )}
+        </Button>
+      </div>
+      {fbError && (
+        <p className="text-[11px] text-destructive">{fbError.message}</p>
+      )}
+    </div>
+  );
+}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="wa-pin">6-digit PIN</Label>
-            <Input
-              id="wa-pin"
-              inputMode="numeric"
-              autoComplete="off"
-              placeholder={autoGenerate ? 'Auto-generate for me' : '••••••'}
-              value={pin}
-              onChange={handlePinChange}
-              maxLength={6}
-              className="font-mono tracking-[0.4em]"
-            />
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] text-muted-foreground">
-                Avoid sequences (123456) or repeats (000000).
-              </p>
-              <button
-                type="button"
-                onClick={handleAutofill}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-              >
-                <Sparkles className="size-3" /> Generate one for me
-              </button>
-            </div>
-            {error && (
-              <p className="text-xs text-destructive">{error}</p>
-            )}
-          </div>
+function SuspendedPanel({ wc }) {
+  return (
+    <div className="space-y-4">
+      <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
+        <InfoItem label="Business name">
+          {wc.businessDisplayName || <Muted>Not set</Muted>}
+        </InfoItem>
+        <InfoItem label="Phone number">
+          {wc.whatsappNumber || <Muted>Not set</Muted>}
+        </InfoItem>
+      </dl>
+      <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+        <ShieldOff className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="space-y-1">
+          <p className="font-medium">Suspended by Slotlii</p>
+          <p className="text-xs leading-relaxed text-destructive/90">
+            WhatsApp sending is temporarily suspended for this clinic. Please
+            contact support@slotlii.com to resolve.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-          <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-            We'll save this PIN securely so we can show it to you again later.
-            For your records, write it down — Meta requires it to re-register
-            this number anywhere else.
-          </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={submitting}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" /> Registering…
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="size-4" /> Register
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+function DisconnectedPanel({
+  onReconnect,
+  reconnecting,
+  fbReady,
+  fbError,
+  hasConfigId,
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full bg-[#25D366]/10">
+        <Link2Off className="size-6 text-[#25D366]" />
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-semibold">WhatsApp is disconnected</p>
+        <p className="max-w-sm text-xs text-muted-foreground">
+          Reconnecting reuses your existing Twilio setup — no template
+          re-approval needed.
+        </p>
+      </div>
+      <Button
+        onClick={onReconnect}
+        disabled={reconnecting || !fbReady || !hasConfigId}
+        className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
+      >
+        {reconnecting ? (
+          <>
+            <Loader2 className="size-4 animate-spin" /> Reconnecting…
+          </>
+        ) : (
+          <>
+            <MessageSquare className="size-4" /> Reconnect WhatsApp
+          </>
+        )}
+      </Button>
+      {fbError && (
+        <p className="text-[11px] text-destructive">{fbError.message}</p>
+      )}
+    </div>
   );
 }
