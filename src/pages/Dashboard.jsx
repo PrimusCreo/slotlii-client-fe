@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -21,6 +21,7 @@ import {
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
 import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -120,6 +121,19 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const loadDashboard = useCallback(async () => {
+    if (!selectedClinicId) return;
+    try {
+      const res = await api.getDashboardStats({
+        clinicId: selectedClinicId,
+        trendDays: 30,
+      });
+      setData(res.data.data);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [selectedClinicId]);
+
   useEffect(() => {
     if (!selectedClinicId) return;
     let cancelled = false;
@@ -141,6 +155,23 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, [selectedClinicId]);
+
+  // The dashboard aggregates appointments, bills, and patients — refetch
+  // its stats whenever any of those change so KPIs stay live without a
+  // manual reload.
+  useRefetchOnEvent(
+    [
+      'appointment.created',
+      'appointment.rescheduled',
+      'appointment.cancelled',
+      'appointment.completed',
+      'appointment.no_show',
+      'bill.issued',
+      'bill.payment_added',
+      'patient.created',
+    ],
+    loadDashboard,
+  );
 
   const today = data?.today;
   const next = today?.next;

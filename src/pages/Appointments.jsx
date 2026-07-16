@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
 import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -104,6 +105,22 @@ export default function Appointments() {
   useEffect(() => {
     if (selectedClinicId) loadAppointments();
   }, [selectedClinicId, filters]);
+
+  // Auto-refresh when any appointment-related notification arrives so
+  // the list reflects walk-ins booked via WhatsApp, status flips made
+  // by another staff member, etc. Debounced inside the hook.
+  useRefetchOnEvent(
+    [
+      'appointment.created',
+      'appointment.rescheduled',
+      'appointment.cancelled',
+      'appointment.completed',
+      'appointment.no_show',
+    ],
+    () => {
+      if (selectedClinicId) loadAppointments();
+    },
+  );
 
   useEffect(() => {
     if (!selectedClinicId) {

@@ -223,4 +223,28 @@ export const getPublicConsent = (token) =>
 export const signPublicConsent = (token, data) =>
   publicApi.post(`/public/consents/${token}/sign`, data);
 
+// ── Notifications ───────────────────────────────────────
+export const getNotifications = (params) =>
+  api.get('/notifications', { params });
+export const getUnreadNotificationCount = () =>
+  api.get('/notifications/unread-count');
+export const markNotificationRead = (id) =>
+  api.post(`/notifications/${id}/read`);
+export const markAllNotificationsRead = () =>
+  api.post('/notifications/mark-all-read');
+/**
+ * SSE stream URL for the notification bus. `EventSource` cannot set an
+ * Authorization header, so the JWT is passed via `?token=` and the
+ * backend validates it inline before upgrading the response to a stream.
+ *
+ * In dev, `API_BASE_URL` is the relative `/api` (proxied by Vite). In
+ * prod it's the absolute origin from `VITE_API_BASE_URL`. Either way the
+ * browser resolves the returned URL correctly.
+ */
+export const notificationStreamUrl = () => {
+  const token = localStorage.getItem('slotlii_client_token');
+  if (!token) return null;
+  return `${API_BASE_URL}/notifications/stream?token=${encodeURIComponent(token)}`;
+};
+
 export default api;

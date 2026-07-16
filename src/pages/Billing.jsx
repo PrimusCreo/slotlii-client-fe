@@ -14,6 +14,7 @@ import Layout from '../components/Layout/Layout';
 import Can from '../components/Can';
 import { useClinic } from '../context/ClinicContext';
 import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
@@ -66,6 +67,7 @@ export default function Billing() {
   const [limit] = useState(20);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     if (searchInput === search) return undefined;
@@ -108,7 +110,13 @@ export default function Billing() {
     return () => {
       cancelled = true;
     };
-  }, [selectedClinicId, page, limit, search, statusFilter]);
+  }, [selectedClinicId, page, limit, search, statusFilter, reloadTick]);
+
+  // Refetch the list + summary whenever bill activity is broadcast on the
+  // notification bus (e.g. another user issues a bill or records a payment).
+  useRefetchOnEvent(['bill.issued', 'bill.payment_added'], () => {
+    setReloadTick((t) => t + 1);
+  });
 
   // Reset to page 1 whenever filters change.
   useEffect(() => {

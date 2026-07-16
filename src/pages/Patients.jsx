@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -72,6 +73,10 @@ export default function Patients() {
   useEffect(() => {
     if (selectedClinicId) loadPatients();
   }, [selectedClinicId, search]);
+
+  useRefetchOnEvent('patient.created', () => {
+    if (selectedClinicId) loadPatients();
+  });
 
   // Debounce the search input so we don't fire a request on every keystroke.
   useEffect(() => {

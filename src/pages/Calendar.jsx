@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
 import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -121,6 +122,19 @@ export default function CalendarPage() {
   useEffect(() => {
     if (selectedClinicId) loadAppointmentsForRange();
   }, [selectedClinicId, visibleRange.start, visibleRange.end, statusFilter]);
+
+  useRefetchOnEvent(
+    [
+      'appointment.created',
+      'appointment.rescheduled',
+      'appointment.cancelled',
+      'appointment.completed',
+      'appointment.no_show',
+    ],
+    () => {
+      if (selectedClinicId) loadAppointmentsForRange();
+    },
+  );
 
   async function loadAppointmentsForRange() {
     setLoading(true);

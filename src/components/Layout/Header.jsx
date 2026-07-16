@@ -5,6 +5,7 @@ import { Building2, ChevronRight, Menu } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
+import NotificationBell from './NotificationBell';
 
 const PARENT_MAP = {
   appointments: { label: 'Appointments', path: '/appointments' },
@@ -89,6 +90,7 @@ export default function Header({ title, onMenuClick }) {
             <span className="font-medium">{selectedClinic.name}</span>
           </div>
         ) : null}
+        <NotificationBell />
         <ThemeToggle />
       </div>
     </header>

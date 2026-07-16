@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
 import { AuthProvider } from './context/AuthContext';
 import { ClinicProvider } from './context/ClinicContext';
+import { NotificationProvider } from './context/NotificationContext';
 import { ThemeProvider } from './components/theme-provider';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
@@ -35,6 +36,7 @@ export default function App() {
         <BrowserRouter>
           <AuthProvider>
             <ClinicProvider>
+              <NotificationProvider>
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
@@ -58,6 +60,7 @@ export default function App() {
                 <Route path="/billing/:id" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_VIEW}><BillDetail /></ProtectedRoute>} />
                 <Route path="/users" element={<ProtectedRoute requiredPermission={PERMISSIONS.USERS_MANAGE}><Users /></ProtectedRoute>} />
               </Routes>
+              </NotificationProvider>
             </ClinicProvider>
           </AuthProvider>
         </BrowserRouter>
