@@ -4,20 +4,26 @@ import {
   AlertCircle,
   CalendarCheck,
   Check,
+  ChevronDown,
+  ClipboardList,
   Clock,
   Loader2,
   Mail,
   Phone,
   Search,
   Stethoscope,
+  Ticket,
   User,
   UserPlus,
+  Users,
   X,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -26,10 +32,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Popover,
   PopoverAnchor,
   PopoverContent,
+  PopoverTrigger,
 } from '@/components/ui/popover';
 import {
   Select,
@@ -39,6 +47,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 
 // ── Small helpers ─────────────────────────────────────────
@@ -69,28 +78,37 @@ function formatLongDate(yyyyMmDd) {
 
 export default function NewAppointment() {
   const { selectedClinicId, selectedClinic } = useClinic();
+  const { isScopedDoctor, doctorId: authDoctorId } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
+  const [mode, setMode] = useState('scheduled'); // 'scheduled' | 'walkin'
   const [doctors, setDoctors] = useState([]);
   const [loadingDoctors, setLoadingDoctors] = useState(true);
   const [patients, setPatients] = useState([]);
   const [loadingPatients, setLoadingPatients] = useState(true);
+  const [treatments, setTreatments] = useState([]);
+  const [loadingTreatments, setLoadingTreatments] = useState(true);
   const [form, setForm] = useState({
     doctorId: '',
     patientId: '',
     date: '',
     time: '',
     issue: '',
+    treatmentIds: [],
   });
   const [availableSlots, setAvailableSlots] = useState([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // After a walk-in is booked we show a celebratory token banner instead of
+  // navigating away immediately — staff need to read the number aloud.
+  const [walkInResult, setWalkInResult] = useState(null);
 
   useEffect(() => {
     if (!selectedClinicId) return;
     loadPatients();
     loadDoctors();
+    loadTreatments();
   }, [selectedClinicId]);
 
   const presetDoctorId = searchParams.get('doctorId');
@@ -101,6 +119,16 @@ export default function NewAppointment() {
     const exists = doctors.some((d) => d._id === presetDoctorId);
     if (exists) setForm((f) => ({ ...f, doctorId: presetDoctorId }));
   }, [presetDoctorId, doctors]);
+
+  // Scoped doctors book appointments only against themselves. Auto-select
+  // their own record so they don't have to pick from a dropdown.
+  useEffect(() => {
+    if (!isScopedDoctor || !authDoctorId || !doctors.length) return;
+    const exists = doctors.some((d) => d._id === authDoctorId);
+    if (exists) {
+      setForm((f) => (f.doctorId === authDoctorId ? f : { ...f, doctorId: authDoctorId }));
+    }
+  }, [isScopedDoctor, authDoctorId, doctors]);
 
   useEffect(() => {
     if (!presetPatientId || !patients.length) return;
@@ -140,6 +168,21 @@ export default function NewAppointment() {
       console.error(err);
     } finally {
       setLoadingPatients(false);
+    }
+  }
+
+  async function loadTreatments() {
+    setLoadingTreatments(true);
+    try {
+      const res = await api.getTreatments({
+        clinicId: selectedClinicId,
+        activeOnly: 'true',
+      });
+      setTreatments(res.data?.data || []);
+    } catch {
+      setTreatments([]);
+    } finally {
+      setLoadingTreatments(false);
     }
   }
 
@@ -189,27 +232,54 @@ export default function NewAppointment() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.patientId || !form.date || !form.time) {
-      toast.error('Please fill all required fields');
+    if (!form.patientId) {
+      toast.error('Please select a patient');
       return;
     }
-    if (doctors.length > 0 && !form.doctorId) {
-      toast.error('Please select a doctor');
-      return;
+
+    const isWalkIn = mode === 'walkin';
+    if (isWalkIn) {
+      // Date/time are server-assigned for walk-ins; only the patient is required.
+    } else {
+      if (!form.date || !form.time) {
+        toast.error('Please fill all required fields');
+        return;
+      }
+      if (doctors.length > 0 && !form.doctorId) {
+        toast.error('Please select a doctor');
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
-      await api.createAppointment({
+      const payload = {
         clinicId: selectedClinicId,
-        doctorId: doctors.length > 0 ? form.doctorId : undefined,
         patientId: form.patientId,
-        date: form.date,
-        time: form.time,
+        doctorId: form.doctorId || undefined,
         issue: form.issue,
-      });
-      toast.success('Appointment booked!');
-      setTimeout(() => navigate('/appointments'), 600);
+      };
+      if (isWalkIn) {
+        payload.appointmentType = 'WALK_IN';
+        payload.treatmentIds = form.treatmentIds;
+      } else {
+        payload.date = form.date;
+        payload.time = form.time;
+      }
+      const res = await api.createAppointment(payload);
+      const appt = res.data?.data;
+      const draftBill = res.data?.bill || null;
+      if (isWalkIn) {
+        setWalkInResult({ appointment: appt, bill: draftBill });
+        toast.success(
+          draftBill
+            ? 'Walk-in registered · draft bill ready'
+            : 'Walk-in registered',
+        );
+      } else {
+        toast.success('Appointment booked!');
+        setTimeout(() => navigate('/appointments'), 600);
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Booking failed');
     } finally {
@@ -217,14 +287,39 @@ export default function NewAppointment() {
     }
   }
 
+  function resetForNextWalkIn() {
+    setWalkInResult(null);
+    setForm({
+      doctorId: '',
+      patientId: '',
+      date: '',
+      time: '',
+      issue: '',
+      treatmentIds: [],
+    });
+  }
+
+  function toggleTreatment(treatmentId) {
+    setForm((f) => {
+      const has = f.treatmentIds.includes(treatmentId);
+      return {
+        ...f,
+        treatmentIds: has
+          ? f.treatmentIds.filter((id) => id !== treatmentId)
+          : [...f.treatmentIds, treatmentId],
+      };
+    });
+  }
+
   const minDate = new Date().toISOString().split('T')[0];
   const dateDisabled = doctors.length > 0 && !form.doctorId;
-  const submitDisabled =
+  const scheduledSubmitDisabled =
     submitting ||
     !form.patientId ||
     !form.date ||
     !form.time ||
     (doctors.length > 0 && !form.doctorId);
+  const walkInSubmitDisabled = submitting || !form.patientId;
 
   const selectedDoctor = doctors.find((d) => d._id === form.doctorId) || null;
   const selectedPatient = patients.find((p) => p._id === form.patientId) || null;
@@ -239,195 +334,641 @@ export default function NewAppointment() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Book appointment</h1>
           <p className="text-sm text-muted-foreground">
-            Find or add a patient, pick a doctor, then choose an open slot.
+            {mode === 'walkin'
+              ? 'Register a walk-in patient — date and time are set to now, and a token is issued automatically.'
+              : 'Find or add a patient, pick a doctor, then choose an open slot.'}
           </p>
         </div>
       </div>
 
-      <Card className="max-w-3xl overflow-hidden">
-        <form onSubmit={handleSubmit}>
-          <div className="divide-y">
-            <Section
-              icon={User}
-              title="Patient"
-              description="Search by name or phone — new phone numbers can be added on the spot."
-            >
-              <PatientCombobox
-                patients={patients}
-                loading={loadingPatients}
-                value={form.patientId}
-                onChange={handlePatientChange}
-                onCreate={handleCreatePatient}
-              />
-            </Section>
+      <Tabs
+        value={mode}
+        onValueChange={(v) => {
+          setMode(v);
+          setWalkInResult(null);
+        }}
+        className="max-w-3xl"
+      >
+        <TabsList className="mb-4">
+          <TabsTrigger value="scheduled" className="gap-1.5">
+            <CalendarCheck className="size-3.5" /> Scheduled
+          </TabsTrigger>
+          <TabsTrigger value="walkin" className="gap-1.5">
+            <Zap className="size-3.5" /> Walk-in
+          </TabsTrigger>
+        </TabsList>
 
-            {loadingDoctors ? (
-              <Section icon={Stethoscope} title="Doctor">
-                <Skeleton className="h-9 w-full" />
-              </Section>
-            ) : doctors.length > 0 ? (
-              <Section
-                icon={Stethoscope}
-                title="Doctor"
-                description="Slots follow this doctor's schedule."
-              >
-                <Select
-                  value={form.doctorId}
-                  onValueChange={(v) =>
-                    setForm({ ...form, doctorId: v, time: '' })
+        <TabsContent value="scheduled" className="mt-0">
+          <Card className="overflow-hidden">
+            <form onSubmit={handleSubmit}>
+              <div className="divide-y">
+                <Section
+                  icon={User}
+                  title="Patient"
+                  description="Search by name or phone — new phone numbers can be added on the spot."
+                >
+                  <PatientCombobox
+                    patients={patients}
+                    loading={loadingPatients}
+                    value={form.patientId}
+                    onChange={handlePatientChange}
+                    onCreate={handleCreatePatient}
+                  />
+                </Section>
+
+                {loadingDoctors ? (
+                  <Section icon={Stethoscope} title="Doctor">
+                    <Skeleton className="h-9 w-full" />
+                  </Section>
+                ) : doctors.length > 0 ? (
+                  <Section
+                    icon={Stethoscope}
+                    title="Doctor"
+                    description={
+                      isScopedDoctor
+                        ? 'Booking against your own schedule.'
+                        : "Slots follow this doctor's schedule."
+                    }
+                  >
+                    <Select
+                      value={form.doctorId}
+                      onValueChange={(v) =>
+                        setForm({ ...form, doctorId: v, time: '' })
+                      }
+                      disabled={isScopedDoctor}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose a doctor…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {doctors.map((d) => (
+                          <SelectItem key={d._id} value={d._id}>
+                            {d.name}
+                            {d.specialization ? ` — ${d.specialization}` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Section>
+                ) : null}
+
+                <Section
+                  icon={CalendarCheck}
+                  title="When"
+                  description={
+                    dateDisabled
+                      ? "Choose a doctor first — available times follow their schedule."
+                      : form.date && (doctors.length === 0 || form.doctorId)
+                        ? `${formatLongDate(form.date)}${selectedDoctor ? ` · ${selectedDoctor.name}` : ''}`
+                        : 'Pick a date to see open time slots.'
                   }
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose a doctor…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {doctors.map((d) => (
-                      <SelectItem key={d._id} value={d._id}>
-                        {d.name}
-                        {d.specialization ? ` — ${d.specialization}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Section>
-            ) : null}
+                  <div className="space-y-4">
+                    <Input
+                      type="date"
+                      value={form.date}
+                      onChange={(e) =>
+                        setForm({ ...form, date: e.target.value, time: '' })
+                      }
+                      min={minDate}
+                      required
+                      disabled={dateDisabled}
+                      className="max-w-xs"
+                    />
 
-            <Section
-              icon={CalendarCheck}
-              title="When"
-              description={
-                dateDisabled
-                  ? "Choose a doctor first — available times follow their schedule."
-                  : form.date && (doctors.length === 0 || form.doctorId)
-                    ? `${formatLongDate(form.date)}${selectedDoctor ? ` · ${selectedDoctor.name}` : ''}`
-                    : 'Pick a date to see open time slots.'
-              }
-            >
-              <div className="space-y-4">
-                <Input
-                  type="date"
-                  value={form.date}
-                  onChange={(e) =>
-                    setForm({ ...form, date: e.target.value, time: '' })
-                  }
-                  min={minDate}
-                  required
-                  disabled={dateDisabled}
-                  className="max-w-xs"
-                />
+                    {form.date && (doctors.length === 0 || form.doctorId) ? (
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Clock className="size-3.5" /> Available time slots
+                        </Label>
+                        {loadingSlots ? (
+                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8">
+                            {Array.from({ length: 12 }).map((_, i) => (
+                              <Skeleton key={i} className="h-9 w-full" />
+                            ))}
+                          </div>
+                        ) : availableSlots.length === 0 ? (
+                          <div className="flex flex-col items-center gap-2 rounded-md border bg-muted/30 px-4 py-8 text-center">
+                            <AlertCircle className="size-5 text-muted-foreground" />
+                            <p className="text-sm font-medium">
+                              {doctors.length > 0 && form.doctorId
+                                ? 'No open slots for this doctor on this date.'
+                                : 'No available slots for this date.'}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Try another date or doctor.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8">
+                            {availableSlots.map((slot) => {
+                              const selected = form.time === slot;
+                              return (
+                                <button
+                                  type="button"
+                                  key={slot}
+                                  onClick={() =>
+                                    setForm({ ...form, time: slot })
+                                  }
+                                  className={cn(
+                                    'h-9 rounded-md border text-sm font-medium tabular-nums transition-colors',
+                                    selected
+                                      ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                                      : 'border-border bg-background hover:border-primary/40 hover:bg-primary/5',
+                                  )}
+                                >
+                                  {slot}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </Section>
 
-                {form.date && (doctors.length === 0 || form.doctorId) ? (
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <Clock className="size-3.5" /> Available time slots
-                    </Label>
-                    {loadingSlots ? (
-                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8">
-                        {Array.from({ length: 12 }).map((_, i) => (
-                          <Skeleton key={i} className="h-9 w-full" />
-                        ))}
-                      </div>
-                    ) : availableSlots.length === 0 ? (
-                      <div className="flex flex-col items-center gap-2 rounded-md border bg-muted/30 px-4 py-8 text-center">
-                        <AlertCircle className="size-5 text-muted-foreground" />
-                        <p className="text-sm font-medium">
-                          {doctors.length > 0 && form.doctorId
-                            ? 'No open slots for this doctor on this date.'
-                            : 'No available slots for this date.'}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Try another date or doctor.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8">
-                        {availableSlots.map((slot) => {
-                          const selected = form.time === slot;
-                          return (
-                            <button
-                              type="button"
-                              key={slot}
-                              onClick={() => setForm({ ...form, time: slot })}
-                              className={cn(
-                                'h-9 rounded-md border text-sm font-medium tabular-nums transition-colors',
-                                selected
-                                  ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                                  : 'border-border bg-background hover:border-primary/40 hover:bg-primary/5',
-                              )}
-                            >
-                              {slot}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                <Section
+                  title="Reason for visit"
+                  description="Optional note for the doctor."
+                >
+                  <Textarea
+                    rows={3}
+                    value={form.issue}
+                    onChange={(e) =>
+                      setForm({ ...form, issue: e.target.value })
+                    }
+                    placeholder="e.g. Toothache, cleaning, check-up…"
+                  />
+                </Section>
+              </div>
+
+              {/* ── Footer · summary + actions ─────────────── */}
+              <div className="border-t bg-muted/30">
+                {showSummary ? (
+                  <div className="border-b px-5 py-3 sm:px-6">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
+                      <SummaryItem
+                        icon={User}
+                        label="Patient"
+                        value={selectedPatient?.name}
+                      />
+                      {doctors.length > 0 ? (
+                        <SummaryItem
+                          icon={Stethoscope}
+                          label="Doctor"
+                          value={selectedDoctor?.name}
+                        />
+                      ) : null}
+                      <SummaryItem
+                        icon={CalendarCheck}
+                        label="Date"
+                        value={form.date ? formatLongDate(form.date) : null}
+                      />
+                      <SummaryItem
+                        icon={Clock}
+                        label="Time"
+                        value={form.time}
+                        tabular
+                      />
+                    </div>
                   </div>
                 ) : null}
-              </div>
-            </Section>
-
-            <Section title="Reason for visit" description="Optional note for the doctor.">
-              <Textarea
-                rows={3}
-                value={form.issue}
-                onChange={(e) => setForm({ ...form, issue: e.target.value })}
-                placeholder="e.g. Toothache, cleaning, check-up…"
-              />
-            </Section>
-          </div>
-
-          {/* ── Footer · summary + actions ─────────────────── */}
-          <div className="border-t bg-muted/30">
-            {showSummary ? (
-              <div className="border-b px-5 py-3 sm:px-6">
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
-                  <SummaryItem
-                    icon={User}
-                    label="Patient"
-                    value={selectedPatient?.name}
-                  />
-                  {doctors.length > 0 ? (
-                    <SummaryItem
-                      icon={Stethoscope}
-                      label="Doctor"
-                      value={selectedDoctor?.name}
-                    />
-                  ) : null}
-                  <SummaryItem
-                    icon={CalendarCheck}
-                    label="Date"
-                    value={form.date ? formatLongDate(form.date) : null}
-                  />
-                  <SummaryItem
-                    icon={Clock}
-                    label="Time"
-                    value={form.time}
-                    tabular
-                  />
+                <div className="flex flex-wrap items-center justify-end gap-2 px-5 py-4 sm:px-6">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => navigate('/appointments')}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={scheduledSubmitDisabled}>
+                    {submitting ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <CalendarCheck className="size-4" />
+                    )}
+                    {submitting ? 'Booking…' : 'Book appointment'}
+                  </Button>
                 </div>
               </div>
-            ) : null}
-            <div className="flex flex-wrap items-center justify-end gap-2 px-5 py-4 sm:px-6">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate('/appointments')}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={submitDisabled}>
-                {submitting ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <CalendarCheck className="size-4" />
-                )}
-                {submitting ? 'Booking…' : 'Book appointment'}
-              </Button>
+            </form>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="walkin" className="mt-0">
+          {walkInResult ? (
+            <WalkInSuccess
+              appointment={walkInResult.appointment}
+              bill={walkInResult.bill}
+              onAddAnother={resetForNextWalkIn}
+              onViewQueue={() => navigate('/appointments')}
+              onViewBill={(billId) => navigate(`/billing/${billId}`)}
+            />
+          ) : (
+            <Card className="overflow-hidden">
+              <form onSubmit={handleSubmit}>
+                <div className="divide-y">
+                  <Section
+                    icon={Users}
+                    title="Patient"
+                    description="Search by name or phone — new phone numbers can be added on the spot."
+                  >
+                    <PatientCombobox
+                      patients={patients}
+                      loading={loadingPatients}
+                      value={form.patientId}
+                      onChange={handlePatientChange}
+                      onCreate={handleCreatePatient}
+                    />
+                  </Section>
+
+                  <Section
+                    icon={Stethoscope}
+                    title="Doctor"
+                    description={
+                      isScopedDoctor
+                        ? 'Walk-in will be assigned to you.'
+                        : 'Optional — staff can assign a doctor later.'
+                    }
+                  >
+                    {loadingDoctors ? (
+                      <Skeleton className="h-9 w-full" />
+                    ) : doctors.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No doctors set up for this clinic yet.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Select
+                          value={form.doctorId || undefined}
+                          onValueChange={(v) =>
+                            setForm({ ...form, doctorId: v })
+                          }
+                          disabled={isScopedDoctor}
+                        >
+                          <SelectTrigger className="max-w-sm">
+                            <SelectValue placeholder="Assign a doctor (optional)…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {doctors.map((d) => (
+                              <SelectItem key={d._id} value={d._id}>
+                                {d.name}
+                                {d.specialization
+                                  ? ` — ${d.specialization}`
+                                  : ''}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {form.doctorId && !isScopedDoctor ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setForm({ ...form, doctorId: '' })}
+                          >
+                            <X className="size-3.5" /> Clear
+                          </Button>
+                        ) : null}
+                      </div>
+                    )}
+                  </Section>
+
+                  <Section
+                    icon={ClipboardList}
+                    title="Treatments"
+                    description="Pick the procedures or services for this visit. Used later for billing."
+                  >
+                    <TreatmentMultiSelect
+                      treatments={treatments}
+                      loading={loadingTreatments}
+                      selectedIds={form.treatmentIds}
+                      onToggle={toggleTreatment}
+                      onClear={() =>
+                        setForm((f) => ({ ...f, treatmentIds: [] }))
+                      }
+                    />
+                  </Section>
+
+                  <Section
+                    title="Reason for visit"
+                    description="Optional note for the doctor."
+                  >
+                    <Textarea
+                      rows={3}
+                      value={form.issue}
+                      onChange={(e) =>
+                        setForm({ ...form, issue: e.target.value })
+                      }
+                      placeholder="e.g. Toothache, cleaning, check-up…"
+                    />
+                  </Section>
+                </div>
+
+                {/* ── Footer · actions ─────────────────────── */}
+                <div className="border-t bg-muted/30">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-4 sm:px-6">
+                    <p className="text-xs text-muted-foreground">
+                      Date &amp; time will be set to now. A token number is issued
+                      automatically.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => navigate('/appointments')}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={walkInSubmitDisabled}>
+                        {submitting ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Ticket className="size-4" />
+                        )}
+                        {submitting ? 'Registering…' : 'Register walk-in'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
+    </Layout>
+  );
+}
+
+/**
+ * Token-number banner shown after a walk-in is registered. Lets staff read
+ * the number aloud to the patient and then either register another walk-in
+ * or jump to the day's appointment queue.
+ */
+function WalkInSuccess({
+  appointment,
+  bill,
+  onAddAnother,
+  onViewQueue,
+  onViewBill,
+}) {
+  const patientName =
+    appointment?.patientId?.name ||
+    (typeof appointment?.patientId === 'string' ? '' : '') ||
+    'Patient';
+  const doctorName = appointment?.doctorId?.name || null;
+  const token = appointment?.tokenNumber;
+  const time = appointment?.time || '';
+
+  return (
+    <Card className="overflow-hidden border-primary/30 bg-primary/[0.03]">
+      <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+        <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Ticket className="size-7" />
+        </div>
+        <p className="text-sm font-medium text-muted-foreground">
+          Walk-in registered for{' '}
+          <span className="text-foreground">{patientName}</span>
+        </p>
+        <div className="my-1 flex items-baseline gap-2">
+          <span className="text-sm font-medium text-muted-foreground">Token</span>
+          <span className="text-5xl font-extrabold tracking-tight text-primary tabular-nums">
+            #{token ?? '—'}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Arrival logged at <span className="tabular-nums">{time}</span>
+          {doctorName ? <> · with {doctorName}</> : null}
+        </p>
+        {bill ? (
+          <p className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700">
+            Draft bill {bill.totalAmount
+              ? `· ₹${Number(bill.totalAmount).toLocaleString('en-IN')}`
+              : ''}{' '}
+            ready to collect
+          </p>
+        ) : null}
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+          <Button type="button" variant="outline" onClick={onAddAnother}>
+            <UserPlus className="size-4" /> Register another
+          </Button>
+          {bill ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => onViewBill?.(bill._id)}
+            >
+              <Ticket className="size-4" /> Open bill
+            </Button>
+          ) : null}
+          <Button type="button" onClick={onViewQueue}>
+            <CalendarCheck className="size-4" /> Today&apos;s queue
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function formatInr(value) {
+  return `₹${Number(value || 0).toLocaleString('en-IN')}`;
+}
+
+/**
+ * Dropdown multi-select for the active treatment catalogue.
+ *
+ * Trigger looks like a regular `<Select>` trigger and shows a one-line
+ * summary (count + price total). Opening it reveals a search input and a
+ * scrollable checkbox list. Picked treatments also render as removable
+ * chips below the trigger so staff can see (and clear) selections without
+ * re-opening the dropdown.
+ */
+function TreatmentMultiSelect({
+  treatments,
+  loading,
+  selectedIds,
+  onToggle,
+  onClear,
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  // Selected treatments in the order the user picked them — used for the
+  // chips row + price total. Falls back to lookup by ID to survive a stale
+  // selection when the catalogue is refetched.
+  const selected = useMemo(() => {
+    const byId = new Map(treatments.map((t) => [t._id, t]));
+    return selectedIds.map((id) => byId.get(id)).filter(Boolean);
+  }, [treatments, selectedIds]);
+
+  const total = useMemo(
+    () => selected.reduce((sum, t) => sum + Number(t.price || 0), 0),
+    [selected],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return treatments;
+    return treatments.filter((t) =>
+      String(t.name || '').toLowerCase().includes(q),
+    );
+  }, [treatments, query]);
+
+  if (loading) {
+    return <Skeleton className="h-10 w-full max-w-md" />;
+  }
+
+  if (!treatments.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No treatments configured yet — add them under{' '}
+        <span className="font-medium">Settings → Treatments</span>.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <Popover
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) setQuery('');
+        }}
+      >
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              'flex h-10 w-full max-w-md items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-left text-sm shadow-sm transition-colors',
+              'hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-ring/40',
+            )}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+          >
+            <span
+              className={cn(
+                'flex-1 truncate',
+                selected.length === 0 && 'text-muted-foreground',
+              )}
+            >
+              {selected.length === 0
+                ? 'Select treatments…'
+                : `${selected.length} treatment${selected.length === 1 ? '' : 's'} · ${formatInr(total)}`}
+            </span>
+            <ChevronDown
+              className={cn(
+                'size-4 shrink-0 text-muted-foreground transition-transform',
+                open && 'rotate-180',
+              )}
+            />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          className="w-[var(--radix-popover-trigger-width)] p-0"
+        >
+          <div className="border-b p-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search treatments…"
+                className="h-8 pl-8 pr-2 text-sm"
+              />
             </div>
           </div>
-        </form>
-      </Card>
-    </Layout>
+
+          {filtered.length === 0 ? (
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No matches.
+            </p>
+          ) : (
+            <ul role="listbox" className="max-h-64 overflow-y-auto p-1">
+              {filtered.map((t) => {
+                const isSelected = selectedSet.has(t._id);
+                return (
+                  <li key={t._id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => onToggle(t._id)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors',
+                        isSelected
+                          ? 'bg-primary/5'
+                          : 'hover:bg-accent hover:text-accent-foreground',
+                      )}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        // Visual only — the parent button handles toggling.
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        className="pointer-events-none"
+                      />
+                      <span className="flex-1 truncate">{t.name}</span>
+                      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                        {formatInr(t.price)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {selected.length > 0 ? (
+            <div className="flex items-center justify-between border-t px-2 py-1.5 text-[11px] text-muted-foreground">
+              <span>
+                {selected.length} selected · {formatInr(total)}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClear?.();
+                  setQuery('');
+                }}
+                className="font-medium text-primary hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+
+      {selected.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map((t) => (
+            <Badge
+              key={t._id}
+              variant="secondary"
+              className="gap-1.5 pr-1 font-normal"
+            >
+              <span className="truncate">{t.name}</span>
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {formatInr(t.price)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onToggle(t._id)}
+                className="ml-0.5 inline-flex size-4 items-center justify-center rounded-full hover:bg-foreground/10"
+                aria-label={`Remove ${t.name}`}
+              >
+                <X className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

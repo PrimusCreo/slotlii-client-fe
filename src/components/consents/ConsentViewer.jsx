@@ -76,11 +76,13 @@ export function ConsentViewer({
     >
       <style>{`
         @media print {
-          @page { size: A4; margin: 12mm; }
+          @page { size: A4; margin: 0; }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
             background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           body.rx-print-mode > *:not([data-rx-portal]) { display: none !important; }
           [data-rx-screen-only] { display: none !important; }
@@ -94,27 +96,26 @@ export function ConsentViewer({
             overflow: visible !important;
             padding: 0 !important;
             margin: 0 !important;
-          }
-          #rx-print-sheet {
-            position: static !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
             background: #ffffff !important;
-            width: 100% !important;
-            max-width: none !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            min-height: calc(297mm - 24mm);
-            display: flex !important;
-            flex-direction: column !important;
           }
-          #rx-print-area {
-            flex: 1 1 auto !important;
-            display: flex !important;
-            flex-direction: column !important;
+          [data-rx-portal] [data-doc-container] {
+            background: #ffffff !important;
+            padding: 0 !important;
+            gap: 0 !important;
+          }
+          [data-rx-portal] .pd-page {
             box-shadow: none !important;
-            border: none !important;
+            outline: none !important;
+            border-radius: 0 !important;
+            page-break-after: always;
+            break-after: page;
+          }
+          [data-rx-portal] .pd-page:last-of-type {
+            page-break-after: auto;
+            break-after: auto;
+          }
+          [data-rx-portal] [data-doc-container] > .text-muted-foreground {
+            display: none !important;
           }
         }
       `}</style>
@@ -171,20 +172,13 @@ export function ConsentViewer({
         </div>
       </div>
 
-      <div data-rx-scroll className="flex-1 overflow-auto px-4 py-6 sm:px-8 sm:py-8">
-        <div
-          id="rx-print-sheet"
-          className="mx-auto w-full max-w-[820px] rounded-lg bg-white shadow-md ring-1 ring-zinc-200"
-        >
-          <div id="rx-print-area" className="flex flex-1 flex-col">
-            <ConsentDocument
-              consent={consent}
-              patient={patient}
-              clinic={clinic}
-              doctor={doctor}
-            />
-          </div>
-        </div>
+      <div data-rx-scroll className="flex-1 overflow-auto">
+        <ConsentDocument
+          consent={consent}
+          patient={patient}
+          clinic={clinic}
+          doctor={doctor}
+        />
       </div>
     </div>,
     document.body,

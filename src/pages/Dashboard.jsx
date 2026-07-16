@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -8,7 +8,6 @@ import {
   CalendarX,
   CheckCircle2,
   Clock,
-  Gift,
   MessageSquare,
   Pill,
   Plus,
@@ -21,6 +20,8 @@ import {
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -115,9 +116,23 @@ function formatPercent(value) {
 
 export default function Dashboard() {
   const { selectedClinicId, selectedClinic } = useClinic();
+  const { isScopedDoctor } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const loadDashboard = useCallback(async () => {
+    if (!selectedClinicId) return;
+    try {
+      const res = await api.getDashboardStats({
+        clinicId: selectedClinicId,
+        trendDays: 30,
+      });
+      setData(res.data.data);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [selectedClinicId]);
 
   useEffect(() => {
     if (!selectedClinicId) return;
@@ -141,6 +156,23 @@ export default function Dashboard() {
     };
   }, [selectedClinicId]);
 
+  // The dashboard aggregates appointments, bills, and patients — refetch
+  // its stats whenever any of those change so KPIs stay live without a
+  // manual reload.
+  useRefetchOnEvent(
+    [
+      'appointment.created',
+      'appointment.rescheduled',
+      'appointment.cancelled',
+      'appointment.completed',
+      'appointment.no_show',
+      'bill.issued',
+      'bill.payment_added',
+      'patient.created',
+    ],
+    loadDashboard,
+  );
+
   const today = data?.today;
   const next = today?.next;
   const trend = data?.trend || [];
@@ -149,7 +181,6 @@ export default function Dashboard() {
   const topDiagnoses = data?.topDiagnoses || [];
   const topMedications = data?.topMedications || [];
   const followUpsDue = data?.followUpsDue || [];
-  const birthdays = data?.birthdays || [];
   const recentActivity = data?.recentActivity || [];
   const patientsKpi = data?.patients || {};
   const rangeTotals = data?.rangeTotals || {};
@@ -225,6 +256,12 @@ export default function Dashboard() {
       </div>
 
       <WhatsAppSetupBanner clinic={selectedClinic} onClick={() => navigate('/settings')} />
+
+      {isScopedDoctor || data?.scope?.kind === 'doctor' ? (
+        <div className="mb-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          These numbers reflect your own bookings, patients, and prescriptions only.
+        </div>
+      ) : null}
 
       {/* ── KPI cards ──────────────────────────────────────── */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -561,8 +598,8 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* ── Row 4 · Follow-ups + Birthdays ─────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* ── Row 4 · Follow-ups ─────────────────────────────── */}
+      <div className="grid gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b">
             <div>
@@ -627,55 +664,6 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader className="border-b">
-            <CardTitle>Birthdays this week</CardTitle>
-            <CardDescription>
-              Send a wish — patients with a birthday in the next 7 days.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="space-y-2 p-4">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : birthdays.length === 0 ? (
-              <EmptyState
-                icon={Gift}
-                title="No birthdays this week"
-                hint="Patient birthdays will pop up here automatically."
-              />
-            ) : (
-              <ul className="divide-y">
-                {birthdays.map((p) => (
-                  <li
-                    key={p.patientId}
-                    className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40"
-                  >
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[color:var(--status-noshow-bg)] text-[color:var(--status-noshow)]">
-                      <Gift className="size-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/patients/${p.patientId}`)}
-                        className="block truncate text-left text-sm font-medium hover:text-primary"
-                      >
-                        {p.name}
-                      </button>
-                      <div className="truncate text-xs text-muted-foreground tabular-nums">
-                        {formatDate(p.birthdayOn)} · turning {p.turning}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </Layout>
   );
@@ -690,7 +678,40 @@ export default function Dashboard() {
 // flow lives.
 function WhatsAppSetupBanner({ clinic, onClick }) {
   if (!clinic) return null;
-  if (clinic.whatsappConfig?.phoneNumberId) return null;
+  const status = clinic.whatsappConfig?.activationStatus || 'not_activated';
+  // Active clinics don't need a nudge. Every other state benefits from
+  // a one-click bounce into Settings where the panel explains what's
+  // happening (activating, failed, suspended, disconnected).
+  if (status === 'active' || status === 'suspended') return null;
+
+  const copy = (() => {
+    switch (status) {
+      case 'activating':
+        return {
+          title: 'WhatsApp activation in progress',
+          body: 'Meta is approving your message templates. This usually takes a few minutes.',
+          cta: 'View status',
+        };
+      case 'activation_failed':
+        return {
+          title: 'WhatsApp activation failed',
+          body: 'Something went wrong during setup. Retry from Settings to pick up where we left off.',
+          cta: 'Fix now',
+        };
+      case 'disconnected':
+        return {
+          title: 'WhatsApp is disconnected',
+          body: 'Reconnect to resume appointment confirmations, reminders and reports over WhatsApp.',
+          cta: 'Reconnect',
+        };
+      default:
+        return {
+          title: 'Finish setup: connect WhatsApp',
+          body: 'Send appointment confirmations and reminders directly from your verified WhatsApp business number.',
+          cta: 'Connect WhatsApp',
+        };
+    }
+  })();
 
   return (
     <div className="mb-6 flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -699,15 +720,12 @@ function WhatsAppSetupBanner({ clinic, onClick }) {
           <MessageSquare className="size-4" />
         </div>
         <div className="min-w-0">
-          <p className="text-sm font-medium">Finish setup: connect WhatsApp</p>
-          <p className="text-xs text-muted-foreground">
-            Send appointment confirmations and reminders directly from your
-            verified WhatsApp business number.
-          </p>
+          <p className="text-sm font-medium">{copy.title}</p>
+          <p className="text-xs text-muted-foreground">{copy.body}</p>
         </div>
       </div>
       <Button size="sm" onClick={onClick}>
-        Connect WhatsApp <ArrowRight className="size-4" />
+        {copy.cta} <ArrowRight className="size-4" />
       </Button>
     </div>
   );

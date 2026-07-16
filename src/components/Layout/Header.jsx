@@ -5,11 +5,14 @@ import { Building2, ChevronRight, Menu } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
+import NotificationBell from './NotificationBell';
 
 const PARENT_MAP = {
   appointments: { label: 'Appointments', path: '/appointments' },
   patients: { label: 'Patients', path: '/patients' },
   doctors: { label: 'Doctors', path: '/doctors' },
+  settings: { label: 'Settings', path: '/settings' },
+  billing: { label: 'Billing', path: '/billing' },
 };
 
 function buildCrumbs(pathname, title) {
@@ -72,11 +75,22 @@ export default function Header({ title, onMenuClick }) {
 
       <div className="ml-auto flex items-center gap-2">
         {selectedClinic ? (
-          <div className="hidden items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-sm sm:flex">
-            <Building2 className="size-3.5 text-primary" />
+          <div className="hidden items-center gap-2 rounded-full border bg-card py-1 pl-1 pr-3 text-sm sm:flex">
+            {selectedClinic.logoUrl ? (
+              <img
+                src={selectedClinic.logoUrl}
+                alt={`${selectedClinic.name} logo`}
+                className="size-6 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex size-6 items-center justify-center rounded-full bg-primary/10">
+                <Building2 className="size-3.5 text-primary" />
+              </span>
+            )}
             <span className="font-medium">{selectedClinic.name}</span>
           </div>
         ) : null}
+        <NotificationBell />
         <ThemeToggle />
       </div>
     </header>

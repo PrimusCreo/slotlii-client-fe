@@ -20,6 +20,8 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -73,6 +75,7 @@ function formatDateDMY(value) {
 
 export default function Appointments() {
   const { selectedClinicId } = useClinic();
+  const { isScopedDoctor } = useAuth();
   const [appointments, setAppointments] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -102,6 +105,22 @@ export default function Appointments() {
   useEffect(() => {
     if (selectedClinicId) loadAppointments();
   }, [selectedClinicId, filters]);
+
+  // Auto-refresh when any appointment-related notification arrives so
+  // the list reflects walk-ins booked via WhatsApp, status flips made
+  // by another staff member, etc. Debounced inside the hook.
+  useRefetchOnEvent(
+    [
+      'appointment.created',
+      'appointment.rescheduled',
+      'appointment.cancelled',
+      'appointment.completed',
+      'appointment.no_show',
+    ],
+    () => {
+      if (selectedClinicId) loadAppointments();
+    },
+  );
 
   useEffect(() => {
     if (!selectedClinicId) {
@@ -237,6 +256,11 @@ export default function Appointments() {
 
   return (
     <Layout title="Appointments">
+      {isScopedDoctor ? (
+        <div className="mb-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          Showing appointments assigned to you.
+        </div>
+      ) : null}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full sm:w-[320px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -297,27 +321,29 @@ export default function Appointments() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs font-medium text-muted-foreground">Doctor</Label>
-            <Select
-              value={filters.doctorId}
-              onValueChange={(v) =>
-                setFilters({ ...filters, doctorId: v, page: 1 })
-              }
-            >
-              <SelectTrigger className="h-9 w-[200px]">
-                <SelectValue placeholder="All doctors" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All doctors</SelectItem>
-                {doctors.map((doc) => (
-                  <SelectItem key={doc._id} value={doc._id}>
-                    {doc.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!isScopedDoctor && (
+            <div className="flex items-center gap-2">
+              <Label className="text-xs font-medium text-muted-foreground">Doctor</Label>
+              <Select
+                value={filters.doctorId}
+                onValueChange={(v) =>
+                  setFilters({ ...filters, doctorId: v, page: 1 })
+                }
+              >
+                <SelectTrigger className="h-9 w-[200px]">
+                  <SelectValue placeholder="All doctors" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All doctors</SelectItem>
+                  {doctors.map((doc) => (
+                    <SelectItem key={doc._id} value={doc._id}>
+                      {doc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {hasFilters ? (
             <Button
               variant="ghost"

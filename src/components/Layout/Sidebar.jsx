@@ -10,12 +10,16 @@ import {
   Plus,
   LogOut,
   MessageSquarePlus,
+  Receipt,
+  UserCog,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAuth } from '../../context/AuthContext';
 import { useClinic } from '../../context/ClinicContext';
 import * as api from '../../api';
+import { PERMISSIONS } from '@/lib/permissions';
 import darkLogo from '../../assets/dark-logo.png';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -37,25 +41,94 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 
+// Each nav entry lists the permission(s) required to *see* it. Items with
+// no `permission` field are always visible to any clinic user. Keep this
+// list ordered — that's the order the sidebar renders.
 const navItems = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { path: '/calendar', label: 'Calendar', icon: Calendar },
-  { path: '/appointments', label: 'Appointments', icon: CalendarCheck, end: true },
-  { path: '/appointments/new', label: 'New booking', icon: Plus },
-  { path: '/patients', label: 'Patients', icon: Users },
-  { path: '/doctors', label: 'Doctors', icon: Stethoscope },
-  { path: '/settings', label: 'Settings', icon: Settings },
+  {
+    path: '/',
+    label: 'Dashboard',
+    icon: LayoutDashboard,
+    end: true,
+    permission: PERMISSIONS.DASHBOARD_VIEW,
+  },
+  {
+    path: '/calendar',
+    label: 'Calendar',
+    icon: Calendar,
+    permission: PERMISSIONS.CALENDAR_VIEW,
+  },
+  {
+    path: '/appointments',
+    label: 'Appointments',
+    icon: CalendarCheck,
+    end: true,
+    permission: PERMISSIONS.APPOINTMENTS_VIEW,
+  },
+  {
+    path: '/appointments/new',
+    label: 'New booking',
+    icon: Plus,
+    permission: PERMISSIONS.APPOINTMENTS_MANAGE,
+  },
+  {
+    path: '/patients',
+    label: 'Patients',
+    icon: Users,
+    permission: PERMISSIONS.PATIENTS_VIEW,
+  },
+  {
+    path: '/doctors',
+    label: 'Doctors',
+    icon: Stethoscope,
+    permission: PERMISSIONS.DOCTORS_VIEW,
+  },
+  {
+    path: '/billing',
+    label: 'Billing',
+    icon: Receipt,
+    permission: PERMISSIONS.BILLS_VIEW,
+  },
+  {
+    path: '/users',
+    label: 'Users',
+    icon: UserCog,
+    permission: PERMISSIONS.USERS_MANAGE,
+  },
+  {
+    path: '/settings',
+    label: 'Settings',
+    icon: Settings,
+    permission: PERMISSIONS.CLINIC_SETTINGS_MANAGE,
+  },
 ];
 
 const emptyFeedback = { category: 'general', message: '', contactEmail: '' };
 
 export default function Sidebar() {
-  const { logout, user } = useAuth();
+  const { logout, user, can, isPlatformAdmin } = useAuth();
   const { selectedClinic } = useClinic();
   const navigate = useNavigate();
+
+  const visibleNavItems = isPlatformAdmin
+    ? []
+    : navItems.filter((item) => !item.permission || can(item.permission));
+
+  // Platform-admin-only entries. Rendered as a separate section so
+  // there's no chance of them leaking into a clinic staff sidebar.
+  const adminNavItems = isPlatformAdmin
+    ? [
+        {
+          path: '/admin/whatsapp',
+          label: 'WhatsApp fleet',
+          icon: ShieldCheck,
+          end: true,
+        },
+      ]
+    : [];
 
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState(emptyFeedback);
@@ -116,30 +189,63 @@ export default function Sidebar() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-4">
-          <div className="mb-2 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Workspace
-          </div>
-          <ul className="flex flex-col gap-0.5">
-            {navItems.map(({ path, label, icon: Icon, end }) => (
-              <li key={path}>
-                <NavLink
-                  to={path}
-                  end={end}
-                  className={({ isActive }) =>
-                    cn(
-                      'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                      'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                      isActive &&
-                        'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
-                    )
-                  }
-                >
-                  <Icon className="size-4 shrink-0" />
-                  <span>{label}</span>
-                </NavLink>
-              </li>
-            ))}
-          </ul>
+          {visibleNavItems.length > 0 ? (
+            <>
+              <div className="mb-2 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Workspace
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {visibleNavItems.map(({ path, label, icon: Icon, end }) => (
+                  <li key={path}>
+                    <NavLink
+                      to={path}
+                      end={end}
+                      className={({ isActive }) =>
+                        cn(
+                          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                          'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                          isActive &&
+                            'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
+                        )
+                      }
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span>{label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
+          {adminNavItems.length > 0 ? (
+            <>
+              <div className="mb-2 mt-4 px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Platform admin
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {adminNavItems.map(({ path, label, icon: Icon, end }) => (
+                  <li key={path}>
+                    <NavLink
+                      to={path}
+                      end={end}
+                      className={({ isActive }) =>
+                        cn(
+                          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                          'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                          isActive &&
+                            'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
+                        )
+                      }
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span>{label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </nav>
 
         <Separator />
@@ -147,16 +253,30 @@ export default function Sidebar() {
         <div className="space-y-2 p-3">
           <div className="flex items-center gap-2.5 rounded-md border border-border/60 bg-card/40 p-2.5">
             <Avatar className="size-8">
+              {selectedClinic?.logoUrl ? (
+                <AvatarImage
+                  src={selectedClinic.logoUrl}
+                  alt={selectedClinic?.name || 'Clinic logo'}
+                  className="object-cover"
+                />
+              ) : null}
               <AvatarFallback className="bg-primary/10 text-primary text-[11px] font-semibold">
                 {initials}
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1 leading-tight">
               <div className="truncate text-sm font-medium">
-                {selectedClinic?.name || 'Clinic'}
+                {user?.name || selectedClinic?.name || 'Clinic'}
               </div>
-              <div className="truncate text-[11px] text-muted-foreground">
-                {user?.email || 'Staff member'}
+              <div className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+                {user?.role ? (
+                  <span className="rounded-sm bg-primary/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary">
+                    {user.role}
+                  </span>
+                ) : null}
+                <span className="truncate">
+                  {user?.email || 'Staff member'}
+                </span>
               </div>
             </div>
           </div>

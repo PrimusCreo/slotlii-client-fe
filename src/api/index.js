@@ -49,10 +49,30 @@ export const verifyEmail = (token) =>
   api.post('/auth/verify-email', { token });
 export const setPassword = (token, password) =>
   api.post('/auth/set-password', { token, password });
+export const acceptStaffInvite = (token, password) =>
+  api.post('/auth/accept-staff-invite', { token, password });
 export const getInvite = (token) => api.get(`/auth/invite/${token}`);
 export const resendVerification = (email) =>
   api.post('/auth/resend-verification', { email });
 export const getMe = () => api.get('/auth/me');
+
+// ── Users (clinic staff RBAC) ───────────────────────────
+export const getUsers = () => api.get('/users');
+export const inviteUser = (payload) => api.post('/users/invite', payload);
+export const resendUserInvite = (inviteId) =>
+  api.post(`/users/invites/${inviteId}/resend`);
+export const revokeUserInvite = (inviteId) =>
+  api.delete(`/users/invites/${inviteId}`);
+export const updateUser = (userId, payload) =>
+  api.patch(`/users/${userId}`, payload);
+export const deactivateUser = (userId) => api.delete(`/users/${userId}`);
+
+// ── Roles (permission editor) ───────────────────────────
+export const getRoles = () => api.get('/roles');
+export const updateRolePermissions = (role, permissions) =>
+  api.put(`/roles/${role}`, { permissions });
+export const resetRolePermissions = (role) =>
+  api.post(`/roles/${role}/reset`);
 
 // ── Clinics ─────────────────────────────────────────────
 export const getClinics = () => api.get('/clinics');
@@ -60,12 +80,51 @@ export const getClinic = (id) => api.get(`/clinics/${id}`);
 export const updateClinic = (id, data) => api.put(`/clinics/${id}`, data);
 export const completeOnboarding = (id) =>
   api.post(`/clinics/${id}/onboarding-complete`);
-export const connectWhatsAppEmbeddedSignup = (id, payload) =>
-  api.post(`/clinics/${id}/whatsapp/embedded-signup`, payload);
-export const registerWhatsApp = (id, payload) =>
-  api.post(`/clinics/${id}/whatsapp/register`, payload);
+// Twilio-backed activation. The frontend still runs Meta Embedded
+// Signup; the returned OAuth `code` + `wabaId` + `phoneNumberId` are
+// posted here and the backend imports the pre-approved WABA into a
+// dedicated Twilio subaccount.
+export const activateWhatsApp = (id, payload) =>
+  api.post(`/clinics/${id}/whatsapp/activate`, payload);
+// Polled while activation is in the `activating` state to surface
+// template approval progress. Returns a lightweight subset of
+// whatsappConfig — no auth tokens ever leave the server.
+export const getWhatsAppStatus = (id) =>
+  api.get(`/clinics/${id}/whatsapp/status`);
 export const disconnectWhatsApp = (id) =>
   api.post(`/clinics/${id}/whatsapp/disconnect`);
+export const reconnectWhatsApp = (id, payload) =>
+  api.post(`/clinics/${id}/whatsapp/reconnect`, payload);
+export const uploadClinicLogo = (id, blob, meta = {}) => {
+  const form = new FormData();
+  const fileName = meta.fileName || 'logo.png';
+  form.append('file', blob, fileName);
+  if (meta.width) form.append('width', String(meta.width));
+  if (meta.height) form.append('height', String(meta.height));
+  return api.post(`/clinics/${id}/logo`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+export const deleteClinicLogo = (id) => api.delete(`/clinics/${id}/logo`);
+
+/**
+ * Upload a letterhead part ("header" or "footer") for a clinic. The
+ * cropper commits a fixed 794×107 PNG blob; we forward its dimensions
+ * so the backend can persist them alongside the file for reference.
+ */
+export const uploadClinicLetterhead = (id, part, blob, meta = {}) => {
+  const form = new FormData();
+  const fileName = meta.fileName || `letterhead-${part}.png`;
+  form.append('file', blob, fileName);
+  if (meta.width) form.append('width', String(meta.width));
+  if (meta.height) form.append('height', String(meta.height));
+  return api.post(`/clinics/${id}/letterhead/${part}`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const deleteClinicLetterhead = (id, part) =>
+  api.delete(`/clinics/${id}/letterhead/${part}`);
 
 // ── Appointments ────────────────────────────────────────
 export const getAppointments = (params) => api.get('/appointments', { params });
@@ -124,6 +183,31 @@ export const updateConsentTemplate = (id, data) =>
 export const deleteConsentTemplate = (id) =>
   api.delete(`/consent-templates/${id}`);
 
+// ── Treatments catalogue ────────────────────────────────
+export const getTreatments = (params) => api.get('/treatments', { params });
+export const getTreatment = (id) => api.get(`/treatments/${id}`);
+export const createTreatment = (data) => api.post('/treatments', data);
+export const updateTreatment = (id, data) =>
+  api.patch(`/treatments/${id}`, data);
+export const deleteTreatment = (id, params) =>
+  api.delete(`/treatments/${id}`, { params });
+
+// ── Bills / invoices ────────────────────────────────────
+export const getBills = (params) => api.get('/bills', { params });
+export const getBillsSummary = (params) =>
+  api.get('/bills/summary', { params });
+export const getBill = (id) => api.get(`/bills/${id}`);
+export const createBill = (data) => api.post('/bills', data);
+export const updateBill = (id, data) => api.patch(`/bills/${id}`, data);
+export const issueBill = (id) => api.post(`/bills/${id}/issue`);
+export const cancelBill = (id, data) => api.post(`/bills/${id}/cancel`, data);
+export const addBillPayment = (id, data) =>
+  api.post(`/bills/${id}/payments`, data);
+export const deleteBillPayment = (id, paymentId) =>
+  api.delete(`/bills/${id}/payments/${paymentId}`);
+export const deleteBill = (id) => api.delete(`/bills/${id}`);
+export const downloadBillPdfUrl = (id) => `${API_BASE_URL}/bills/${id}/pdf`;
+
 // ── Patient consents ────────────────────────────────────
 export const createPatientConsent = (patientId, data) =>
   api.post(`/patients/${patientId}/consents`, data);
@@ -147,5 +231,64 @@ export const getPublicConsent = (token) =>
   publicApi.get(`/public/consents/${token}`);
 export const signPublicConsent = (token, data) =>
   publicApi.post(`/public/consents/${token}/sign`, data);
+
+// ── Platform-admin WhatsApp observability + lifecycle ───
+// All endpoints require the caller to be logged in as `platform_admin`.
+// The backend enforces this via `requireRole('platform_admin')`; the
+// frontend hides them from clinic users via the ProtectedRoute gate.
+export const adminGetWhatsAppOverview = () =>
+  api.get('/admin/whatsapp/overview');
+export const adminGetClinicWhatsAppUsage = (id, params) =>
+  api.get(`/admin/clinics/${id}/whatsapp/usage`, { params });
+export const adminGetClinicWhatsAppMessages = (id, params) =>
+  api.get(`/admin/clinics/${id}/whatsapp/messages`, { params });
+export const adminGetClinicWhatsAppTemplates = (id) =>
+  api.get(`/admin/clinics/${id}/whatsapp/templates`);
+export const adminGetClinicSenderHealth = (id) =>
+  api.get(`/admin/clinics/${id}/whatsapp/sender-health`);
+export const adminResyncClinicTemplates = (id) =>
+  api.post(`/admin/clinics/${id}/whatsapp/resync-templates`);
+export const adminResubmitClinicTemplate = (id, templateName) =>
+  api.post(`/admin/clinics/${id}/whatsapp/resubmit-template`, { templateName });
+export const adminSuspendClinicWhatsApp = (id) =>
+  api.post(`/admin/clinics/${id}/whatsapp/suspend`);
+export const adminUnsuspendClinicWhatsApp = (id) =>
+  api.post(`/admin/clinics/${id}/whatsapp/unsuspend`);
+export const adminRotateClinicToken = (id, newAuthToken) =>
+  api.post(`/admin/clinics/${id}/whatsapp/rotate-token`, { newAuthToken });
+export const adminCloseClinicSubaccount = (id) =>
+  api.post(`/admin/clinics/${id}/whatsapp/close-subaccount`);
+export const adminListRollups = (params) =>
+  api.get('/admin/whatsapp/rollups', { params });
+export const adminReplayRollup = (payload) =>
+  api.post('/admin/whatsapp/rollups/replay', payload || {});
+export const adminGetClinicRollups = (id) =>
+  api.get(`/admin/clinics/${id}/whatsapp/rollups`);
+export const adminReplayClinicRollup = (id, payload) =>
+  api.post(`/admin/clinics/${id}/whatsapp/rollups/replay`, payload || {});
+
+// ── Notifications ───────────────────────────────────────
+export const getNotifications = (params) =>
+  api.get('/notifications', { params });
+export const getUnreadNotificationCount = () =>
+  api.get('/notifications/unread-count');
+export const markNotificationRead = (id) =>
+  api.post(`/notifications/${id}/read`);
+export const markAllNotificationsRead = () =>
+  api.post('/notifications/mark-all-read');
+/**
+ * SSE stream URL for the notification bus. `EventSource` cannot set an
+ * Authorization header, so the JWT is passed via `?token=` and the
+ * backend validates it inline before upgrading the response to a stream.
+ *
+ * In dev, `API_BASE_URL` is the relative `/api` (proxied by Vite). In
+ * prod it's the absolute origin from `VITE_API_BASE_URL`. Either way the
+ * browser resolves the returned URL correctly.
+ */
+export const notificationStreamUrl = () => {
+  const token = localStorage.getItem('slotlii_client_token');
+  if (!token) return null;
+  return `${API_BASE_URL}/notifications/stream?token=${encodeURIComponent(token)}`;
+};
 
 export default api;

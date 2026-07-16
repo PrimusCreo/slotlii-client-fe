@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useRefetchOnEvent } from '../context/NotificationContext';
 import * as api from '../api';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -52,7 +53,7 @@ const initialForm = {
   name: '',
   phone: '',
   email: '',
-  dateOfBirth: '',
+  age: '',
   gender: '',
   address: '',
 };
@@ -72,6 +73,10 @@ export default function Patients() {
   useEffect(() => {
     if (selectedClinicId) loadPatients();
   }, [selectedClinicId, search]);
+
+  useRefetchOnEvent('patient.created', () => {
+    if (selectedClinicId) loadPatients();
+  });
 
   // Debounce the search input so we don't fire a request on every keystroke.
   useEffect(() => {
@@ -353,12 +358,16 @@ export default function Patients() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="p-dob">Date of birth</Label>
+                <Label htmlFor="p-age">Age</Label>
                 <Input
-                  id="p-dob"
-                  type="date"
-                  value={form.dateOfBirth}
-                  onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+                  id="p-age"
+                  type="number"
+                  min="0"
+                  max="150"
+                  inputMode="numeric"
+                  value={form.age}
+                  onChange={(e) => setForm({ ...form, age: e.target.value })}
+                  placeholder="e.g. 35"
                 />
               </div>
               <div className="space-y-1.5">

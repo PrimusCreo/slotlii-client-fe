@@ -281,9 +281,12 @@ function PublicShell({ children }) {
 }
 
 function DocumentPaper({ children }) {
+  // The paginated ConsentDocument now renders its own sheet chrome (one
+  // A4 page card per page on a light-grey backdrop), so we just make
+  // sure the outer wrapper doesn't add competing rings or shadows.
   return (
-    <div className="mx-auto w-full max-w-[820px] overflow-hidden rounded-lg bg-white shadow-md ring-1 ring-zinc-200">
-      <div className="flex flex-col">{children}</div>
+    <div className="mx-auto w-full max-w-3xl">
+      {children}
     </div>
   );
 }

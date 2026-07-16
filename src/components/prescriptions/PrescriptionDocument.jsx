@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { Heart, Phone } from 'lucide-react';
 
-import { trimSignatureDataUrl } from '@/utils/signatureTrim';
+import { PaginatedDocument } from '@/components/documents/PaginatedDocument';
 
 const PRIMARY = '#fe6e00';
 const PRIMARY_TINT = '#FFF4EB';
@@ -9,6 +8,9 @@ const PRIMARY_SOFT = '#FFFAF5';
 const PRIMARY_BORDER = '#FFD7B5';
 const TEXT = '#1f2937';
 const TEXT_MUTED = '#6b7280';
+
+const DOC_FONT_FAMILY =
+  "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial";
 
 function formatDate(value) {
   if (!value) return '';
@@ -21,11 +23,11 @@ function formatDate(value) {
   });
 }
 
-function calcAge(dob) {
-  if (!dob) return null;
-  const diff = Date.now() - new Date(dob).getTime();
-  if (Number.isNaN(diff)) return null;
-  return Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000));
+function patientAge(patient) {
+  const raw = patient?.age;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 function genderLabel(g) {
@@ -35,21 +37,14 @@ function genderLabel(g) {
 }
 
 function ageGenderLine(patient) {
-  const age = calcAge(patient?.dateOfBirth);
+  const age = patientAge(patient);
   const gender = genderLabel(patient?.gender);
   const parts = [];
-  if (age !== null && age !== undefined && !Number.isNaN(age)) {
-    parts.push(`${age} yrs`);
-  }
+  if (age !== null) parts.push(`${age} yrs`);
   if (gender) parts.push(gender);
   return parts.join(' / ') || '—';
 }
 
-/**
- * Derive a stable, human-readable prescription id from the entry's date and
- * Mongo `_id`. Format: RX + YYMMDD + last 4 hex chars (uppercase) of _id.
- * Falls back to a numeric-only suffix when no _id is present yet (preview).
- */
 function buildPrescriptionId(prescription) {
   const d = prescription?.date ? new Date(prescription.date) : new Date();
   const yy = String(d.getFullYear() % 100).padStart(2, '0');
@@ -60,10 +55,6 @@ function buildPrescriptionId(prescription) {
   return `RX${yy}${mm}${dd}${suffix}`;
 }
 
-/**
- * Split a free-text findings string into bullet points by newlines.
- * Returns null when the input is empty.
- */
 function formatFollowUp(value) {
   if (!value) return '';
   const str = String(value).trim();
@@ -83,6 +74,31 @@ function splitBullets(text) {
     .filter(Boolean);
   return items.length ? items : null;
 }
+
+/**
+ * Compose the "Treatment Done" string. See the backend `prescriptionPdf`
+ * for the mirroring logic — kept identical here so the on-screen preview
+ * and the printed PDF list the same bullets in the same order.
+ */
+function formatTreatmentDone(prescription) {
+  const items = Array.isArray(prescription?.treatmentDoneItems)
+    ? prescription.treatmentDoneItems
+    : [];
+  const lines = [];
+  for (const item of items) {
+    const name = (item?.name || '').trim();
+    const note = (item?.note || '').trim();
+    if (!name && !note) continue;
+    if (name && note) lines.push(`${name} \u2014 ${note}`);
+    else lines.push(name || note);
+  }
+  if (lines.length) return lines.join('\n');
+  // Legacy fallbacks — `condition` intentionally excluded so it doesn't
+  // duplicate the dedicated "Diagnosis" row rendered below.
+  return prescription?.treatmentDone || prescription?.assessmentPlan || '';
+}
+
+// ── Building blocks ──────────────────────────────────────
 
 function ClinicalRow({ label, value, striped }) {
   if (!value) return null;
@@ -142,361 +158,485 @@ function InfoCell({ label, value }) {
   );
 }
 
-export function PrescriptionDocument({ prescription, patient, clinic, doctor }) {
-  const rawSignatureData = doctor?.signatureData || '';
-  const [displaySignature, setDisplaySignature] = useState('');
+/**
+ * The compact "meta strip" that identifies the document at the top of
+ * page 1 — used both when the clinic uploaded a letterhead (the strip
+ * lives inside the content region under the artwork) and as part of
+ * the auto-generated fallback header.
+ */
+function MetaStrip({ rxId, date }) {
+  return (
+    <div className="flex items-center justify-between gap-4 text-[12px]">
+      <span className="font-bold tracking-wider" style={{ color: PRIMARY }}>
+        PRESCRIPTION
+      </span>
+      <span style={{ color: TEXT_MUTED }}>
+        Rx ID:{' '}
+        <span className="font-semibold" style={{ color: TEXT }}>
+          {rxId}
+        </span>
+        {'   ·   '}Date:{' '}
+        <span className="font-semibold" style={{ color: TEXT }}>
+          {date || '—'}
+        </span>
+      </span>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!rawSignatureData) {
-      setDisplaySignature('');
-      return undefined;
-    }
-    trimSignatureDataUrl(rawSignatureData).then((trimmed) => {
-      if (!cancelled) setDisplaySignature(trimmed);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [rawSignatureData]);
-
-  if (!prescription) return null;
-
-  const meds = prescription.medications || [];
+/**
+ * The auto-generated clinic header block used when no letterhead is
+ * uploaded. Rendered inside `PaginatedDocument`'s header slot so it
+ * repeats on every page.
+ */
+function FallbackHeader({ clinic, rxId, prescription }) {
   const clinicName = clinic?.name || 'Clinic';
   const clinicAddress = clinic?.address;
-  const clinicPhone = clinic?.phone;
-
-  const doctorName = doctor?.name || prescription.doctor || '';
-  const doctorQualifications = doctor?.qualifications || '';
-  const doctorSpec = doctor?.specialization || '';
-  const doctorRegNo = doctor?.registrationNo || '';
-
-  const rxId = buildPrescriptionId(prescription);
-
-  // Map "Chief Complaint" → falls back to entry.notes so the section is
-  // never empty for legacy prescriptions; same for Assessment & Plan ←
-  // legacy `condition` (diagnosis) field.
-  const chiefComplaint = prescription.chiefComplaint || prescription.notes || '';
-  const medicalHistory = prescription.medicalHistory || '';
-  const examinationFindings = prescription.examinationFindings || '';
-  const treatmentDone =
-    prescription.treatmentDone ||
-    prescription.assessmentPlan ||
-    prescription.condition ||
-    '';
-  const followUp = formatFollowUp(prescription.followUp);
+  const clinicLogoUrl = clinic?.logoUrl;
+  const clinicPhones = [clinic?.phone, ...(clinic?.additionalPhones || [])]
+    .map((p) => (p ? String(p).trim() : ''))
+    .filter(Boolean);
 
   return (
-    <div
-      className="mx-auto flex w-full max-w-[820px] flex-1 flex-col bg-white"
-      style={{
-        color: TEXT,
-        fontFamily:
-          "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
-      }}
-    >
-      {/* Header — clinic + Rx pill */}
-      <div className="flex items-start justify-between gap-6 px-8 pt-8">
-        <div className="min-w-0">
-          <h1
-            className="text-[22px] font-bold leading-tight"
-            style={{ color: TEXT }}
-          >
-            {clinicName}
-          </h1>
-          {clinicAddress ? (
-            <p
-              className="mt-1.5 max-w-[360px] whitespace-pre-line text-[12px] leading-relaxed"
-              style={{ color: TEXT_MUTED }}
-            >
-              {clinicAddress}
-            </p>
+    <div className="px-10 pt-6 pb-3">
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex min-w-0 items-start gap-3">
+          {clinicLogoUrl ? (
+            <img
+              src={clinicLogoUrl}
+              alt={`${clinicName} logo`}
+              className="size-12 shrink-0 rounded-md object-cover"
+              style={{ border: `1px solid ${PRIMARY_BORDER}` }}
+            />
           ) : null}
-          {clinicPhone ? (
-            <div
-              className="mt-2 inline-flex items-center gap-1.5 text-[12px]"
-              style={{ color: TEXT_MUTED }}
+          <div className="min-w-0">
+            <h1
+              className="text-[20px] font-bold leading-tight"
+              style={{ color: TEXT }}
             >
-              <Phone className="size-3" style={{ color: PRIMARY }} />
-              <span>{clinicPhone}</span>
-            </div>
-          ) : null}
+              {clinicName}
+            </h1>
+            {clinicAddress ? (
+              <p
+                className="mt-1 max-w-[360px] whitespace-pre-line text-[11px] leading-relaxed"
+                style={{ color: TEXT_MUTED }}
+              >
+                {clinicAddress}
+              </p>
+            ) : null}
+            {clinicPhones.length ? (
+              <div
+                className="mt-1 inline-flex items-center gap-1.5 text-[11px]"
+                style={{ color: TEXT_MUTED }}
+              >
+                <Phone className="size-3" style={{ color: PRIMARY }} />
+                <span>{clinicPhones.join(' · ')}</span>
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
           <div
-            className="flex items-center gap-3 rounded-md px-5 py-2.5 text-white"
+            className="flex items-center gap-2 rounded-md px-4 py-2 text-white"
             style={{ backgroundColor: PRIMARY }}
           >
-            <span className="text-[15px] font-bold tracking-wider">
+            <span className="text-[13px] font-bold tracking-wider">
               PRESCRIPTION
             </span>
             <span
-              className="flex size-7 items-center justify-center rounded-md bg-white text-[15px] font-bold"
+              className="flex size-6 items-center justify-center rounded-md bg-white text-[13px] font-bold"
               style={{ color: PRIMARY, fontFamily: 'Georgia, serif' }}
             >
               ℞
             </span>
           </div>
-          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
-            Prescription ID :{' '}
+          <div className="text-[10.5px]" style={{ color: TEXT_MUTED }}>
+            {formatDate(prescription?.date) || '—'} · Rx :{' '}
             <span className="font-semibold" style={{ color: TEXT }}>
               {rxId}
             </span>
           </div>
         </div>
       </div>
+      <div className="mt-3 h-px" style={{ backgroundColor: PRIMARY_BORDER }} />
+    </div>
+  );
+}
 
-      <div
-        className="mx-8 mt-5 h-px"
-        style={{ backgroundColor: PRIMARY_BORDER }}
+function FallbackFooter() {
+  // The Slotlii attribution now lives in the system-footer strip
+  // rendered by PaginatedDocument, so this fallback footer only needs
+  // to carry the clinic's "thank you" note.
+  return (
+    <div
+      className="flex items-center border-t px-10 py-3 text-[10.5px]"
+      style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <Heart className="size-3 fill-current" style={{ color: PRIMARY }} />
+        Thank you for trusting us with your care.
+      </span>
+    </div>
+  );
+}
+
+// ── Table pieces ─────────────────────────────────────────
+
+const MED_COL_WIDTHS = ['36px', '160px', '72px', '92px', '72px', '1fr'];
+
+function MedsSectionTitle() {
+  return (
+    <div className="flex items-center gap-3">
+      <span
+        className="inline-block h-4 w-[3px]"
+        style={{ backgroundColor: PRIMARY }}
       />
-
-      {/* Doctor + Patient details row */}
-      <div className="mx-8 mt-5 grid grid-cols-[1fr_1.4fr] gap-5">
-        <div className="min-w-0">
-          <div className="text-[15px] font-bold" style={{ color: TEXT }}>
-            {doctorName || '—'}
-          </div>
-          {doctorQualifications ? (
-            <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
-              {doctorQualifications}
-            </div>
-          ) : null}
-          {doctorSpec ? (
-            <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
-              {doctorSpec}
-            </div>
-          ) : null}
-        </div>
-
-        <div
-          className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-md border px-4 py-3"
-          style={{ borderColor: PRIMARY_BORDER, backgroundColor: PRIMARY_SOFT }}
-        >
-          <InfoCell label="Patient Name" value={patient?.name} />
-          <InfoCell label="Date" value={formatDate(prescription.date)} />
-          <InfoCell label="Age / Gender" value={ageGenderLine(patient)} />
-          <InfoCell label="Phone" value={patient?.phone} />
-        </div>
-      </div>
-
-      {/* Clinical sections */}
-      <div
-        className="mx-8 mt-5 overflow-hidden rounded-md border"
-        style={{ borderColor: PRIMARY_BORDER }}
+      <span
+        className="text-[12px] font-semibold uppercase tracking-[0.1em]"
+        style={{ color: PRIMARY }}
       >
-        <ClinicalRow
-          label="Chief Complaint / Subjective"
-          value={chiefComplaint}
-          striped={false}
-        />
-        <ClinicalRow
-          label="Medical History"
-          value={medicalHistory}
-          striped
-        />
-        <ClinicalRow
-          label="Examination / Findings"
-          value={examinationFindings}
-          striped={false}
-        />
-        <ClinicalRow
-          label="Treatment Done"
-          value={treatmentDone}
-          striped
-        />
-      </div>
+        Prescription
+      </span>
+    </div>
+  );
+}
 
-      {/* Medicines */}
-      <div className="mx-8 mt-5">
-        <div className="flex items-center gap-3">
-          <span
-            className="inline-block h-4 w-[3px]"
-            style={{ backgroundColor: PRIMARY }}
-          />
-          <span
-            className="text-[12px] font-semibold uppercase tracking-[0.1em]"
-            style={{ color: PRIMARY }}
-          >
-            Prescription
-          </span>
+/**
+ * Table header row + first row wrapper. The `borderTop` /
+ * `borderBottom` on the row divs create the illusion of a single
+ * bordered table even though every row is a standalone block that the
+ * pagination layer can freely rearrange.
+ */
+function MedsTableHeader() {
+  const headerCells = ['#', 'Medicine', 'Dose', 'Frequency', 'Duration', 'Instructions'];
+  return (
+    <div
+      className="grid rounded-t-md border text-[10.5px] font-semibold uppercase tracking-wider"
+      style={{
+        gridTemplateColumns: MED_COL_WIDTHS.join(' '),
+        borderColor: PRIMARY_BORDER,
+        backgroundColor: PRIMARY_TINT,
+        color: PRIMARY,
+      }}
+    >
+      {headerCells.map((h, i) => (
+        <div key={i} className="px-3 py-2.5">
+          {h}
         </div>
-        {meds.length ? (
-          <table
-            className="mt-3 w-full border-collapse overflow-hidden rounded-md border text-[12.5px]"
-            style={{ borderColor: PRIMARY_BORDER }}
-          >
-            <thead>
-              <tr style={{ backgroundColor: PRIMARY_TINT, color: PRIMARY }}>
-                <th
-                  className="w-9 border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  #
-                </th>
-                <th
-                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  Medicine
-                </th>
-                <th
-                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  Dose
-                </th>
-                <th
-                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  Frequency
-                </th>
-                <th
-                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  Duration
-                </th>
-                <th
-                  className="border-b px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider"
-                  style={{ borderColor: PRIMARY_BORDER }}
-                >
-                  Instructions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {meds.map((m, i) => (
-                <tr
-                  key={m._id || i}
-                  style={{
-                    backgroundColor: i % 2 === 1 ? PRIMARY_SOFT : '#ffffff',
-                  }}
-                >
-                  <td
-                    className="border-b px-3 py-2.5 tabular-nums"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
-                  >
-                    {i + 1}
-                  </td>
-                  <td
-                    className="border-b px-3 py-2.5 font-medium"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
-                  >
-                    {m.name || '—'}
-                  </td>
-                  <td
-                    className="border-b px-3 py-2.5"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
-                  >
-                    {m.dosage || '—'}
-                  </td>
-                  <td
-                    className="border-b px-3 py-2.5"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
-                  >
-                    {m.frequency || '—'}
-                  </td>
-                  <td
-                    className="border-b px-3 py-2.5"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
-                  >
-                    {m.duration || '—'}
-                  </td>
-                  <td
-                    className="border-b px-3 py-2.5"
-                    style={{ borderColor: PRIMARY_BORDER, color: TEXT }}
-                  >
-                    {m.instructions || '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p
-            className="mt-2 rounded-md border border-dashed px-3 py-3 text-center text-xs"
-            style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
-          >
-            No medications recorded.
-          </p>
-        )}
+      ))}
+    </div>
+  );
+}
+
+function MedsTableRow({ index, med, isLast }) {
+  return (
+    <div
+      className="grid border-x border-b text-[12.5px]"
+      style={{
+        gridTemplateColumns: MED_COL_WIDTHS.join(' '),
+        borderColor: PRIMARY_BORDER,
+        backgroundColor: index % 2 === 1 ? PRIMARY_SOFT : '#ffffff',
+        borderBottomLeftRadius: isLast ? 6 : undefined,
+        borderBottomRightRadius: isLast ? 6 : undefined,
+      }}
+    >
+      <div className="px-3 py-2.5 tabular-nums" style={{ color: TEXT_MUTED }}>
+        {index + 1}
       </div>
+      <div className="px-3 py-2.5 font-medium" style={{ color: TEXT }}>
+        {med.name || '—'}
+      </div>
+      <div className="px-3 py-2.5" style={{ color: TEXT }}>
+        {med.dosage || '—'}
+      </div>
+      <div className="px-3 py-2.5" style={{ color: TEXT }}>
+        {med.frequency || '—'}
+      </div>
+      <div className="px-3 py-2.5" style={{ color: TEXT }}>
+        {med.duration || '—'}
+      </div>
+      <div className="px-3 py-2.5" style={{ color: TEXT }}>
+        {med.instructions || '—'}
+      </div>
+    </div>
+  );
+}
 
-      {/* Follow up */}
-      {followUp ? (
-        <div
-          className="mx-8 mt-5 overflow-hidden rounded-md border"
-          style={{ borderColor: PRIMARY_BORDER }}
-        >
-          <ClinicalRow label="Follow Up" value={followUp} striped={false} />
+function MedsEmpty() {
+  return (
+    <p
+      className="rounded-md border border-dashed px-3 py-3 text-center text-xs"
+      style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
+    >
+      No medications recorded.
+    </p>
+  );
+}
+
+function DoctorPatientBlock({ doctor, patient, prescription }) {
+  const doctorName = doctor?.name || prescription.doctor || '';
+  const doctorQualifications = doctor?.qualifications || '';
+  const doctorSpec = doctor?.specialization || '';
+  return (
+    <div className="grid grid-cols-[1fr_1.4fr] gap-5">
+      <div className="min-w-0">
+        <div className="text-[15px] font-bold" style={{ color: TEXT }}>
+          {doctorName || '—'}
         </div>
-      ) : null}
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* Signature */}
-      <div className="mx-8 mt-10 flex items-end justify-end pb-6">
-        <div className="text-right">
-          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
-            Doctor Signature
+        {doctorQualifications ? (
+          <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
+            {doctorQualifications}
           </div>
-          {displaySignature ? (
-            <img
-              src={displaySignature}
-              alt=""
-              className="ml-auto mt-2 h-16 max-w-[200px] object-contain object-right"
-            />
-          ) : null}
+        ) : null}
+        {doctorSpec ? (
+          <div className="mt-0.5 text-[12px]" style={{ color: TEXT_MUTED }}>
+            {doctorSpec}
+          </div>
+        ) : null}
+      </div>
+      <div
+        className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-md border px-4 py-3"
+        style={{ borderColor: PRIMARY_BORDER, backgroundColor: PRIMARY_SOFT }}
+      >
+        <InfoCell label="Patient Name" value={patient?.name} />
+        <InfoCell label="Date" value={formatDate(prescription.date)} />
+        <InfoCell label="Age / Gender" value={ageGenderLine(patient)} />
+        <InfoCell label="Phone" value={patient?.phone} />
+      </div>
+    </div>
+  );
+}
+
+function SignatureBlock({ doctor, prescription }) {
+  const doctorName = doctor?.name || prescription.doctor || '';
+  const doctorQualifications = doctor?.qualifications || '';
+  const doctorRegNo = doctor?.registrationNo || '';
+  return (
+    <div className="mt-8 flex items-end justify-end">
+      <div className="text-right">
+        <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+          Doctor Signature
+        </div>
+        <div
+          className="mt-12 ml-auto h-px w-48"
+          style={{ backgroundColor: PRIMARY_BORDER }}
+        />
+        {doctorName ? (
           <div
-            className="mt-2 h-px w-48 ml-auto"
-            style={{ backgroundColor: PRIMARY_BORDER }}
-          />
-          {doctorName ? (
-            <div
-              className="mt-2 text-[13px] font-bold"
-              style={{ color: TEXT }}
-            >
-              {doctorName}
-            </div>
-          ) : null}
-          {doctorQualifications ? (
-            <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
-              {doctorQualifications}
-            </div>
-          ) : null}
-          {doctorRegNo ? (
-            <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
-              Reg. No. {doctorRegNo}
-            </div>
-          ) : null}
-        </div>
+            className="mt-2 text-[13px] font-bold"
+            style={{ color: TEXT }}
+          >
+            {doctorName}
+          </div>
+        ) : null}
+        {doctorQualifications ? (
+          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+            {doctorQualifications}
+          </div>
+        ) : null}
+        {doctorRegNo ? (
+          <div className="text-[11px]" style={{ color: TEXT_MUTED }}>
+            Reg. No. {doctorRegNo}
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
 
-      {/* Footer */}
-      <div
-        className="flex items-center justify-between border-t px-8 py-3 text-[11px]"
-        style={{ borderColor: PRIMARY_BORDER, color: TEXT_MUTED }}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <Heart
-            className="size-3 fill-current"
-            style={{ color: PRIMARY }}
+// ── Top-level document ──────────────────────────────────
+
+/**
+ * Renders a prescription as a paginated A4 document. Each visible
+ * "page" carries the clinic letterhead (or the auto-generated fallback
+ * header + footer if none is uploaded) so long prescriptions with lots
+ * of medications flow across sheets naturally.
+ *
+ * `mode="preview"` (default) shows the Google-Docs style chrome; the
+ * headless-browser print route uses `mode="print"` to strip the chrome
+ * so Chrome's `page.pdf` treats each `.pd-page` div as one PDF page.
+ */
+export function PrescriptionDocument({
+  prescription,
+  patient,
+  clinic,
+  doctor,
+  mode = 'preview',
+  onReady,
+}) {
+  if (!prescription) return null;
+
+  const meds = prescription.medications || [];
+  const letterheadHeaderUrl = clinic?.letterhead?.header?.url;
+  const letterheadFooterUrl = clinic?.letterhead?.footer?.url;
+  const rxId = buildPrescriptionId(prescription);
+  const dateLine = formatDate(prescription.date);
+
+  // Clinical values — falling back to `notes` for chief complaint
+  // preserves the sane display for legacy prescriptions that predate
+  // the structured fields.
+  const chiefComplaint = prescription.chiefComplaint || prescription.notes || '';
+  const medicalHistory = prescription.medicalHistory || '';
+  const examinationFindings = prescription.examinationFindings || '';
+  // The prescription form's "Diagnosis *" input is persisted on the
+  // record as `condition`, so we read that key here.
+  const diagnosis = prescription.condition || '';
+  const treatmentDone = formatTreatmentDone(prescription);
+  const treatmentAdvice = prescription.treatmentAdvice || '';
+  const followUp = formatFollowUp(prescription.followUp);
+
+  // Assign the stripe pattern AFTER filtering out empty rows so the
+  // alternating background stays consistent regardless of which
+  // sections a given prescription actually populates.
+  const clinicalRows = [
+    { id: 'clinical-cc', label: 'Chief Complaint / Subjective', value: chiefComplaint },
+    { id: 'clinical-mh', label: 'Medical History', value: medicalHistory },
+    { id: 'clinical-ex', label: 'Examination / Findings', value: examinationFindings },
+    { id: 'clinical-dx', label: 'Diagnosis', value: diagnosis },
+    { id: 'clinical-td', label: 'Treatment Done', value: treatmentDone },
+    { id: 'clinical-ta', label: 'Treatment Advice', value: treatmentAdvice },
+  ]
+    .filter((r) => r.value)
+    .map((r, i) => ({ ...r, striped: i % 2 === 1 }));
+
+  // Build the ordered block list. We use spacer blocks (`gap-*`) as
+  // deliberate breathing room between sections — the packer treats
+  // them as regular blocks so they can absorb the "keep-together"
+  // margins naturally instead of leaking into the next page.
+  const blocks = [
+    // Meta strip only when letterhead is active — the fallback header
+    // has its own inline meta line, so we skip it there.
+    ...(letterheadHeaderUrl
+      ? [
+          {
+            id: 'meta-strip',
+            node: (
+              <div className="pb-3">
+                <MetaStrip rxId={rxId} date={dateLine} />
+                <div
+                  className="mt-2 h-px"
+                  style={{ backgroundColor: PRIMARY_BORDER }}
+                />
+              </div>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: 'doctor-patient',
+      node: (
+        <div className="pb-4">
+          <DoctorPatientBlock
+            doctor={doctor}
+            patient={patient}
+            prescription={prescription}
           />
-          Thank you for trusting us with your care.
-        </span>
-        <span>
-          Generated via{' '}
-          <span className="font-semibold" style={{ color: PRIMARY }}>
-            Slotlii
-          </span>{' '}
-          Clinic OS
-        </span>
-      </div>
+        </div>
+      ),
+    },
+    ...(clinicalRows.length
+      ? [
+          {
+            id: 'clinical-wrap-start',
+            node: (
+              <div
+                className="rounded-t-md border-x border-t"
+                style={{ borderColor: PRIMARY_BORDER, height: 0 }}
+              />
+            ),
+          },
+          ...clinicalRows.map((r, idx) => ({
+            id: r.id,
+            node: (
+              <div
+                className={idx === clinicalRows.length - 1 ? 'pb-0' : ''}
+                style={{
+                  borderLeft: `1px solid ${PRIMARY_BORDER}`,
+                  borderRight: `1px solid ${PRIMARY_BORDER}`,
+                  borderBottom:
+                    idx === clinicalRows.length - 1
+                      ? `1px solid ${PRIMARY_BORDER}`
+                      : 'none',
+                  borderBottomLeftRadius:
+                    idx === clinicalRows.length - 1 ? 6 : undefined,
+                  borderBottomRightRadius:
+                    idx === clinicalRows.length - 1 ? 6 : undefined,
+                }}
+              >
+                <ClinicalRow label={r.label} value={r.value} striped={r.striped} />
+              </div>
+            ),
+          })),
+          {
+            id: 'clinical-gap',
+            node: <div className="h-4" />,
+          },
+        ]
+      : []),
+    { id: 'meds-title', node: <MedsSectionTitle /> },
+    { id: 'meds-title-gap', node: <div className="h-2" /> },
+    ...(meds.length
+      ? [
+          { id: 'meds-header', node: <MedsTableHeader /> },
+          ...meds.map((m, i) => ({
+            id: `med-${m._id || i}`,
+            node: (
+              <MedsTableRow
+                index={i}
+                med={m}
+                isLast={i === meds.length - 1}
+              />
+            ),
+          })),
+        ]
+      : [{ id: 'meds-empty', node: <MedsEmpty /> }]),
+    ...(followUp
+      ? [
+          { id: 'follow-up-gap', node: <div className="h-4" /> },
+          {
+            id: 'follow-up',
+            node: (
+              <div
+                className="overflow-hidden rounded-md border"
+                style={{ borderColor: PRIMARY_BORDER }}
+              >
+                <ClinicalRow label="Follow Up" value={followUp} striped={false} />
+              </div>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: 'signature',
+      node: (
+        <SignatureBlock doctor={doctor} prescription={prescription} />
+      ),
+    },
+  ];
+
+  return (
+    <div
+      style={{
+        color: TEXT,
+        fontFamily: DOC_FONT_FAMILY,
+      }}
+    >
+      <PaginatedDocument
+        blocks={blocks}
+        letterheadHeaderUrl={letterheadHeaderUrl}
+        letterheadFooterUrl={letterheadFooterUrl}
+        renderFallbackHeader={() => (
+          <FallbackHeader
+            clinic={clinic}
+            rxId={rxId}
+            prescription={prescription}
+          />
+        )}
+        renderFallbackFooter={() => <FallbackFooter />}
+        mode={mode}
+        onReady={onReady}
+      />
     </div>
   );
 }

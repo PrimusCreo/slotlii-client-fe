@@ -12,8 +12,10 @@ import {
 import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
+import Can, { useCan } from '../components/Can';
 import { useClinic } from '../context/ClinicContext';
 import * as api from '../api';
+import { PERMISSIONS } from '@/lib/permissions';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,6 +54,7 @@ const emptyForm = {
 export default function Doctors() {
   const navigate = useNavigate();
   const { selectedClinicId } = useClinic();
+  const canManageDoctors = useCan(PERMISSIONS.DOCTORS_MANAGE);
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -153,9 +156,11 @@ export default function Doctors() {
             ) : null}
           </div>
           <span className="ml-auto text-sm text-muted-foreground">
-            <Button onClick={openAddModal} disabled={!selectedClinicId}>
-              <Plus /> Add doctor
-            </Button>
+            <Can permission={PERMISSIONS.DOCTORS_MANAGE}>
+              <Button onClick={openAddModal} disabled={!selectedClinicId}>
+                <Plus /> Add doctor
+              </Button>
+            </Can>
           </span>
         </CardContent>
       </Card>
@@ -174,9 +179,18 @@ export default function Doctors() {
                 <Stethoscope className="size-5" />
               </div>
               <p className="text-sm font-medium">No doctors yet</p>
-              <Button size="sm" onClick={openAddModal}>
-                Add your first doctor
-              </Button>
+              <Can
+                permission={PERMISSIONS.DOCTORS_MANAGE}
+                fallback={
+                  <p className="text-xs text-muted-foreground">
+                    Ask an admin to add clinicians here.
+                  </p>
+                }
+              >
+                <Button size="sm" onClick={openAddModal}>
+                  Add your first doctor
+                </Button>
+              </Can>
             </div>
           ) : (
             <Table>
@@ -236,15 +250,17 @@ export default function Doctors() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon-sm"
-                        onClick={(e) => handleDelete(d, e)}
-                        aria-label={`Delete ${d.name}`}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
+                      {canManageDoctors ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon-sm"
+                          onClick={(e) => handleDelete(d, e)}
+                          aria-label={`Delete ${d.name}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ))}
