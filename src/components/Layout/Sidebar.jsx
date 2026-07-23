@@ -12,7 +12,6 @@ import {
   MessageSquarePlus,
   Receipt,
   UserCog,
-  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -119,16 +118,13 @@ export default function Sidebar() {
 
   // Platform-admin-only entries. Rendered as a separate section so
   // there's no chance of them leaking into a clinic staff sidebar.
-  const adminNavItems = isPlatformAdmin
-    ? [
-        {
-          path: '/admin/whatsapp',
-          label: 'WhatsApp fleet',
-          icon: ShieldCheck,
-          end: true,
-        },
-      ]
-    : [];
+  //
+  // Admin observability tools (WhatsApp fleet, per-clinic diagnostics,
+  // reset workflows, etc.) now live in the separate slotlii-admin-fe
+  // app rather than being embedded inside a clinic dashboard. Kept as
+  // an empty array so the surrounding platform_admin UI branches keep
+  // working without needing to re-thread state.
+  const adminNavItems = [];
 
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState(emptyFeedback);

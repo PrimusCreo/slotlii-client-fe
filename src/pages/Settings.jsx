@@ -12,7 +12,6 @@ import {
   Link2Off,
   Phone,
   Plus,
-  RefreshCw,
   ShieldOff,
   Trash2,
   Upload,
@@ -368,12 +367,15 @@ export default function Settings() {
     }
   }
 
-  // While the clinic sits in `activating`, poll the status endpoint
-  // every 15s so the frontend can update template approval progress
-  // and flip to `active` without a page reload.
+  // While the clinic sits in a transient state (`activating` after
+  // signup, or `resetting` while admin performs a reset), poll the
+  // status endpoint every 15s so the frontend flips to a terminal
+  // state (`active`, `activation_failed`) without a page reload.
   useEffect(() => {
     if (!selectedClinicId) return undefined;
-    if (activationStatus !== 'activating') {
+    const isTransient =
+      activationStatus === 'activating' || activationStatus === 'resetting';
+    if (!isTransient) {
       setWaStatus(null);
       return undefined;
     }
@@ -384,9 +386,10 @@ export default function Settings() {
         const res = await api.getWhatsAppStatus(selectedClinicId);
         if (cancelled) return;
         setWaStatus(res.data.data);
-        // Server flipped us to active — refresh the clinic doc so the
-        // rest of the UI sees the new status.
-        if (res.data.data.activationStatus !== 'activating') {
+        // Server flipped us out of the transient state — refresh the
+        // clinic doc so the rest of the UI sees the new status.
+        const newStatus = res.data.data.activationStatus;
+        if (newStatus !== 'activating' && newStatus !== 'resetting') {
           const clinicRes = await api.getClinic(selectedClinicId);
           if (!cancelled) setSelectedClinic(clinicRes.data.data);
         }
@@ -1094,6 +1097,12 @@ function WhatsAppStatusBadge({ status }) {
           <Clock className="size-3" /> Activating…
         </Badge>
       );
+    case 'resetting':
+      return (
+        <Badge variant="warning" className="font-normal">
+          <Loader2 className="size-3 animate-spin" /> Being fixed…
+        </Badge>
+      );
     case 'activation_failed':
       return (
         <Badge variant="destructive" className="font-normal">
@@ -1145,17 +1154,11 @@ function WhatsAppPanel({
   if (status === 'activating') {
     return <ActivatingPanel wc={wc} waStatus={waStatus} />;
   }
+  if (status === 'resetting') {
+    return <ResettingPanel wc={wc} />;
+  }
   if (status === 'activation_failed') {
-    return (
-      <ActivationFailedPanel
-        wc={wc}
-        onRetry={onConnect}
-        retrying={connecting}
-        fbReady={fbReady}
-        fbError={fbError}
-        hasConfigId={hasConfigId}
-      />
-    );
+    return <ActivationFailedPanel wc={wc} />;
   }
   if (status === 'suspended') {
     return <SuspendedPanel wc={wc} />;
@@ -1264,11 +1267,15 @@ function ConnectedPanel({ wc, onDisconnect, disconnecting }) {
   );
 }
 
-function ActivatingPanel({ wc, waStatus }) {
-  const summary = waStatus?.summary || null;
-  const pct = summary && summary.total > 0
-    ? Math.round((summary.approved / summary.total) * 100)
-    : 0;
+function ActivatingPanel({ wc }) {
+  // Historically we surfaced a "N of M templates approved" progress
+  // bar here. That leaked internal Slotlii machinery to clinic users
+  // — they shouldn't know or care that message templates need Meta
+  // approval; they just want to know WhatsApp is coming up.
+  //
+  // If clinics are curious about "why is this taking so long?", the
+  // admin dashboard has the real answer. The clinic-facing copy stays
+  // abstract and reassuring.
   return (
     <div className="space-y-4">
       <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
@@ -1285,74 +1292,89 @@ function ActivatingPanel({ wc, waStatus }) {
         <div className="space-y-2 w-full">
           <p className="font-medium">Setting things up on your behalf</p>
           <p className="text-xs leading-relaxed text-amber-900/80 dark:text-amber-100/80">
-            We're provisioning your messaging sender and submitting message
-            templates to Meta for approval. Meta typically approves within
-            minutes. You can leave this page — status will update
-            automatically here and on the dashboard.
+            We're getting your WhatsApp number ready to send messages. This
+            usually finishes within a few minutes but can occasionally take a
+            few hours depending on Meta. You can safely leave this page — the
+            status will update automatically here and on your dashboard.
           </p>
-          {summary ? (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-medium">
-                <span>Template approvals</span>
-                <span>
-                  {summary.approved} of {summary.total} approved
-                  {summary.rejected > 0 ? ` · ${summary.rejected} rejected` : ''}
-                </span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-amber-200/60 dark:bg-amber-800/40">
-                <div
-                  className="h-1.5 rounded-full bg-amber-600 transition-all"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </div>
-          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-function ActivationFailedPanel({
-  wc,
-  onRetry,
-  retrying,
-  fbReady,
-  fbError,
-  hasConfigId,
-}) {
+function ResettingPanel({ wc }) {
+  // Admin-triggered reset in progress (level: templates / sender /
+  // full). No user-facing action is possible — status will flip
+  // automatically once the reset completes and the clinic re-enters
+  // its normal lifecycle (activating → active, or not_activated for
+  // sender/full resets).
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
-        <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-        <div className="space-y-1">
-          <p className="font-medium">Activation failed</p>
-          <p className="text-xs leading-relaxed text-destructive/90">
-            {wc.activationError ||
-              'Something went wrong while activating WhatsApp. Try again — we will pick up where we left off.'}
+      <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
+        <InfoItem label="Business name">
+          {wc.businessDisplayName || <Muted>Not set</Muted>}
+        </InfoItem>
+        <InfoItem label="Phone number">
+          {wc.whatsappNumber || <Muted>Not set</Muted>}
+        </InfoItem>
+      </dl>
+
+      <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+        <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
+        <div className="space-y-2 w-full">
+          <p className="font-medium">Our team is looking into this</p>
+          <p className="text-xs leading-relaxed text-amber-900/80 dark:text-amber-100/80">
+            The Slotlii team is currently fixing something with your WhatsApp
+            setup. Sending is paused for a few minutes. Nothing is required
+            from you — this page will refresh automatically when we're done.
           </p>
         </div>
       </div>
-      <div className="flex justify-end">
-        <Button
-          onClick={onRetry}
-          disabled={retrying || !fbReady || !hasConfigId}
-          className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
-        >
-          {retrying ? (
-            <>
-              <Loader2 className="size-4 animate-spin" /> Retrying…
-            </>
-          ) : (
-            <>
-              <RefreshCw className="size-4" /> Retry activation
-            </>
-          )}
-        </Button>
+    </div>
+  );
+}
+
+function ActivationFailedPanel({ wc }) {
+  // We intentionally do NOT surface `wc.activationError` here — that
+  // field contains raw error strings from Twilio/Meta that would only
+  // confuse clinic staff (e.g. "Media URL with placeholder must be a
+  // valid URL"). The admin dashboard shows the full detail; the
+  // clinic-facing view stays abstract.
+  //
+  // We also removed the client-side "Retry activation" button. Retries
+  // now require admin intervention via slotlii-admin-fe because most
+  // failures are structural (bad template defs, Meta rejections, etc.)
+  // that a retry won't fix on its own.
+  return (
+    <div className="space-y-4">
+      <dl className="grid gap-x-6 gap-y-4 rounded-md border bg-muted/20 px-4 py-4 sm:grid-cols-2">
+        <InfoItem label="Business name">
+          {wc.businessDisplayName || <Muted>Not set</Muted>}
+        </InfoItem>
+        <InfoItem label="Phone number">
+          {wc.whatsappNumber || <Muted>Not set</Muted>}
+        </InfoItem>
+      </dl>
+
+      <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+        <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="space-y-2 w-full">
+          <p className="font-medium">Something needs our attention</p>
+          <p className="text-xs leading-relaxed text-destructive/90">
+            Your WhatsApp activation ran into a problem. Our team has been
+            notified and is working on it — you'll get an email as soon as
+            it's fixed. If you need it resolved sooner, please email us at{' '}
+            <a
+              href="mailto:support@slotlii.com"
+              className="font-medium underline underline-offset-2"
+            >
+              support@slotlii.com
+            </a>
+            .
+          </p>
+        </div>
       </div>
-      {fbError && (
-        <p className="text-[11px] text-destructive">{fbError.message}</p>
-      )}
     </div>
   );
 }

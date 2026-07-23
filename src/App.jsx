@@ -28,8 +28,6 @@ import NewBill from './pages/NewBill';
 import BillDetail from './pages/BillDetail';
 import Users from './pages/Users';
 import PublicConsentSign from './pages/PublicConsentSign';
-import AdminWhatsAppOverview from './pages/AdminWhatsAppOverview';
-import AdminWhatsAppClinicDetail from './pages/AdminWhatsAppClinicDetail';
 
 export default function App() {
   return (
@@ -61,8 +59,6 @@ export default function App() {
                 <Route path="/billing/new" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_MANAGE}><NewBill /></ProtectedRoute>} />
                 <Route path="/billing/:id" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_VIEW}><BillDetail /></ProtectedRoute>} />
                 <Route path="/users" element={<ProtectedRoute requiredPermission={PERMISSIONS.USERS_MANAGE}><Users /></ProtectedRoute>} />
-                <Route path="/admin/whatsapp" element={<ProtectedRoute requiredRole="platform_admin"><AdminWhatsAppOverview /></ProtectedRoute>} />
-                <Route path="/admin/whatsapp/clinics/:id" element={<ProtectedRoute requiredRole="platform_admin"><AdminWhatsAppClinicDetail /></ProtectedRoute>} />
               </Routes>
               </NotificationProvider>
             </ClinicProvider>

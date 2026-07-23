@@ -232,40 +232,10 @@ export const getPublicConsent = (token) =>
 export const signPublicConsent = (token, data) =>
   publicApi.post(`/public/consents/${token}/sign`, data);
 
-// ── Platform-admin WhatsApp observability + lifecycle ───
-// All endpoints require the caller to be logged in as `platform_admin`.
-// The backend enforces this via `requireRole('platform_admin')`; the
-// frontend hides them from clinic users via the ProtectedRoute gate.
-export const adminGetWhatsAppOverview = () =>
-  api.get('/admin/whatsapp/overview');
-export const adminGetClinicWhatsAppUsage = (id, params) =>
-  api.get(`/admin/clinics/${id}/whatsapp/usage`, { params });
-export const adminGetClinicWhatsAppMessages = (id, params) =>
-  api.get(`/admin/clinics/${id}/whatsapp/messages`, { params });
-export const adminGetClinicWhatsAppTemplates = (id) =>
-  api.get(`/admin/clinics/${id}/whatsapp/templates`);
-export const adminGetClinicSenderHealth = (id) =>
-  api.get(`/admin/clinics/${id}/whatsapp/sender-health`);
-export const adminResyncClinicTemplates = (id) =>
-  api.post(`/admin/clinics/${id}/whatsapp/resync-templates`);
-export const adminResubmitClinicTemplate = (id, templateName) =>
-  api.post(`/admin/clinics/${id}/whatsapp/resubmit-template`, { templateName });
-export const adminSuspendClinicWhatsApp = (id) =>
-  api.post(`/admin/clinics/${id}/whatsapp/suspend`);
-export const adminUnsuspendClinicWhatsApp = (id) =>
-  api.post(`/admin/clinics/${id}/whatsapp/unsuspend`);
-export const adminRotateClinicToken = (id, newAuthToken) =>
-  api.post(`/admin/clinics/${id}/whatsapp/rotate-token`, { newAuthToken });
-export const adminCloseClinicSubaccount = (id) =>
-  api.post(`/admin/clinics/${id}/whatsapp/close-subaccount`);
-export const adminListRollups = (params) =>
-  api.get('/admin/whatsapp/rollups', { params });
-export const adminReplayRollup = (payload) =>
-  api.post('/admin/whatsapp/rollups/replay', payload || {});
-export const adminGetClinicRollups = (id) =>
-  api.get(`/admin/clinics/${id}/whatsapp/rollups`);
-export const adminReplayClinicRollup = (id, payload) =>
-  api.post(`/admin/clinics/${id}/whatsapp/rollups/replay`, payload || {});
+// Platform-admin WhatsApp observability + lifecycle bindings used to
+// live here. They've been moved to slotlii-admin-fe's api/index.js
+// where they belong — client-fe is now purely a clinic-facing app and
+// no longer talks to /api/admin/* endpoints.
 
 // ── Notifications ───────────────────────────────────────
 export const getNotifications = (params) =>
