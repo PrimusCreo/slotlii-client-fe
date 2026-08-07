@@ -26,6 +26,7 @@ export const PERMISSIONS = Object.freeze({
   CONSENTS_TEMPLATES_MANAGE: 'consents.templates.manage',
   DOCTORS_MANAGE: 'doctors.manage',
   BILLS_DELETE: 'bills.delete',
+  SUBSCRIPTION_MANAGE: 'subscription.manage',
 
   // ── Everyday operations (all clinic roles by default) ──
   DASHBOARD_VIEW: 'dashboard.view',
@@ -79,6 +80,11 @@ export const PERMISSION_METADATA = Object.freeze({
     label: 'Delete bills',
     description: 'Permanently remove an invoice (destructive)',
     group: 'Billing',
+  },
+  [PERMISSIONS.SUBSCRIPTION_MANAGE]: {
+    label: 'Plan and billing',
+    description: "View and change the clinic's Slotlii subscription",
+    group: 'Administration',
   },
   [PERMISSIONS.DASHBOARD_VIEW]: {
     label: 'View dashboard',

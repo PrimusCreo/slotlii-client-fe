@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import * as api from '../api';
 
@@ -32,6 +32,42 @@ export function ClinicProvider({ children }) {
     }
   }
 
+  /**
+   * The backend embeds a read-only billing summary on the clinic payload, so
+   * plan state costs no extra request. `reloadClinic()` is what refreshes it
+   * after a checkout or cancellation.
+   */
+  const subscription = selectedClinic?.subscription || null;
+
+  const subscriptionState = useMemo(() => {
+    // Treat an unknown subscription as unlocked. Guessing "locked" would show
+    // a paywall banner during the initial load, and the backend is the real
+    // enforcement point regardless.
+    if (!subscription) {
+      return {
+        subscription: null,
+        isSubscriptionLocked: false,
+        isTrialing: false,
+        trialDaysRemaining: null,
+        planCode: null,
+        planLimits: {},
+        planFeatures: {},
+        hasFeature: () => true,
+      };
+    }
+
+    return {
+      subscription,
+      isSubscriptionLocked: !subscription.isActive,
+      isTrialing: Boolean(subscription.isTrialing),
+      trialDaysRemaining: subscription.trialDaysRemaining ?? null,
+      planCode: subscription.planCode || null,
+      planLimits: subscription.limits || {},
+      planFeatures: subscription.features || {},
+      hasFeature: (key) => Boolean(subscription.features?.[key]),
+    };
+  }, [subscription]);
+
   return (
     <ClinicContext.Provider
       value={{
@@ -42,6 +78,7 @@ export function ClinicProvider({ children }) {
         reloadClinic: loadClinic,
         setSelectedClinicId: () => {}, // no-op, locked to JWT clinic
         loading,
+        ...subscriptionState,
       }}
     >
       {children}

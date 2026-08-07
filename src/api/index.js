@@ -1,4 +1,8 @@
 import axios from 'axios';
+import {
+  emitPlanRestriction,
+  parsePlanRestriction,
+} from '../lib/planRestrictions';
 
 // In dev, leave VITE_API_BASE_URL unset to use the Vite proxy at `/api`.
 // In prod, set it to the full API origin, e.g. `https://api.slotlii.com/api`.
@@ -18,10 +22,19 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// ── Response interceptor — auto-logout on 401 ───────────
+// ── Response interceptor — auto-logout on 401, upgrade prompt on 402/403 ──
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Plan limits, feature gates, and the soft lock deserve an upgrade dialog
+    // with the real numbers, not a toast that scrolls away. Callers can still
+    // catch the error and handle it inline — this only opens the dialog.
+    const restriction = parsePlanRestriction(error);
+    if (restriction) {
+      emitPlanRestriction(restriction);
+      return Promise.reject(error);
+    }
+
     if (error.response?.status === 401) {
       const isLoginRequest = error.config?.url?.includes('/auth/login');
       // Don't bounce visitors who are on a public page (e.g. the patient
@@ -236,6 +249,19 @@ export const signPublicConsent = (token, data) =>
 // live here. They've been moved to slotlii-admin-fe's api/index.js
 // where they belong — client-fe is now purely a clinic-facing app and
 // no longer talks to /api/admin/* endpoints.
+
+// ── Subscription (Slotlii plan & billing) ───────────────
+// Distinct from `/bills`, which is the clinic invoicing its own patients.
+export const getSubscription = () => api.get('/subscription');
+export const getPlans = () => api.get('/subscription/plans');
+export const getSubscriptionUsage = () => api.get('/subscription/usage');
+export const createSubscriptionCheckout = (planCode, billingCycle) =>
+  api.post('/subscription/checkout', { planCode, billingCycle });
+export const cancelSubscription = () => api.post('/subscription/cancel');
+/** Re-reads the mandate from Cashfree — used when returning from checkout. */
+export const syncSubscription = () => api.post('/subscription/sync');
+export const getSubscriptionPayments = (params) =>
+  api.get('/subscription/payments', { params });
 
 // ── Notifications ───────────────────────────────────────
 export const getNotifications = (params) =>

@@ -15,7 +15,10 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import RolesManager from '../components/users/RolesManager';
+import { CapacityHint } from '../components/subscription/CapacityHint';
 import { useAuth } from '../context/AuthContext';
+import { usePlanUsage } from '../hooks/usePlanUsage';
+import { parsePlanRestriction } from '@/lib/planRestrictions';
 import * as api from '../api';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -121,6 +124,11 @@ export default function Users() {
   const [editForm, setEditForm] = useState(emptyEdit);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
+  // Seats count accepted accounts *and* pending invites, so this is the number
+  // that decides whether another invite can go out.
+  const { usage, refresh: refreshUsage } = usePlanUsage();
+  const atSeatLimit = Boolean(usage?.staffUsers?.isAtLimit);
+
   useEffect(() => {
     loadAll();
   }, []);
@@ -141,6 +149,7 @@ export default function Users() {
       setUsers(usersRes.data.data.users || []);
       setInvites(usersRes.data.data.invites || []);
       setDoctors(doctorsRes.data.data || []);
+      refreshUsage();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load users');
     } finally {
@@ -192,7 +201,11 @@ export default function Users() {
       setInviteOpen(false);
       loadAll();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Could not send invite');
+      // Seat limits open the upgrade dialog, which says how many seats are in
+      // use — a toast alongside it would just repeat that less clearly.
+      if (!parsePlanRestriction(err)) {
+        toast.error(err.response?.data?.error || 'Could not send invite');
+      }
     } finally {
       setInviteSubmitting(false);
     }
@@ -307,12 +320,21 @@ export default function Users() {
               </button>
             ) : null}
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-3">
+            <CapacityHint meter={usage?.staffUsers} noun="staff seats" />
             <Button variant="outline" size="sm" onClick={loadAll}>
               <RefreshCw className="size-3.5" />
               Refresh
             </Button>
-            <Button onClick={openInvite}>
+            <Button
+              onClick={openInvite}
+              disabled={atSeatLimit}
+              title={
+                atSeatLimit
+                  ? 'Your plan has no staff seats left. Upgrade to invite more.'
+                  : undefined
+              }
+            >
               <Plus /> Invite user
             </Button>
           </div>

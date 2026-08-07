@@ -13,7 +13,10 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import Can, { useCan } from '../components/Can';
+import { CapacityHint } from '../components/subscription/CapacityHint';
 import { useClinic } from '../context/ClinicContext';
+import { usePlanUsage } from '../hooks/usePlanUsage';
+import { parsePlanRestriction } from '@/lib/planRestrictions';
 import * as api from '../api';
 import { PERMISSIONS } from '@/lib/permissions';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -62,6 +65,8 @@ export default function Doctors() {
   const [pagination, setPagination] = useState({ total: 0, pages: 1 });
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const { usage, refresh: refreshUsage } = usePlanUsage();
+  const atDoctorLimit = Boolean(usage?.doctors?.isAtLimit);
 
   useEffect(() => {
     if (selectedClinicId) loadDoctors();
@@ -107,6 +112,7 @@ export default function Doctors() {
       const res = await api.createDoctor({ ...form, clinicId: selectedClinicId });
       toast.success('Doctor added');
       closeModal();
+      refreshUsage();
       const created = res.data.data;
       if (created?._id) {
         navigate(`/doctors/${created._id}`);
@@ -114,7 +120,11 @@ export default function Doctors() {
         loadDoctors();
       }
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Request failed');
+      // A plan restriction already opens the upgrade dialog, which explains it
+      // with the actual numbers — a toast on top of that is just noise.
+      if (!parsePlanRestriction(err)) {
+        toast.error(err.response?.data?.error || 'Request failed');
+      }
     }
   }
 
@@ -126,6 +136,7 @@ export default function Doctors() {
       await api.deleteDoctor(doc._id);
       toast.success('Doctor removed');
       loadDoctors();
+      refreshUsage();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to delete');
     }
@@ -155,13 +166,22 @@ export default function Doctors() {
               </button>
             ) : null}
           </div>
-          <span className="ml-auto text-sm text-muted-foreground">
+          <div className="ml-auto flex items-center gap-3">
             <Can permission={PERMISSIONS.DOCTORS_MANAGE}>
-              <Button onClick={openAddModal} disabled={!selectedClinicId}>
+              <CapacityHint meter={usage?.doctors} noun="doctors" />
+              <Button
+                onClick={openAddModal}
+                disabled={!selectedClinicId || atDoctorLimit}
+                title={
+                  atDoctorLimit
+                    ? 'Your plan has no doctor slots left. Upgrade to add more.'
+                    : undefined
+                }
+              >
                 <Plus /> Add doctor
               </Button>
             </Can>
-          </span>
+          </div>
         </CardContent>
       </Card>
 

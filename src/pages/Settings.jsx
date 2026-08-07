@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   Building2,
   CheckCircle2,
   Clock,
+  CreditCard,
   FileImage,
   ImageIcon,
   Loader2,
@@ -22,8 +24,10 @@ import { toast } from 'sonner';
 
 import Layout from '../components/Layout/Layout';
 import { useClinic } from '../context/ClinicContext';
+import { useAuth } from '../context/AuthContext';
 import { useFacebookSdk } from '../hooks/useFacebookSdk';
 import * as api from '../api';
+import { PERMISSIONS } from '@/lib/permissions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -40,9 +44,35 @@ import { ConsentTemplatesManager } from '../components/consents/ConsentTemplates
 import { TreatmentsManager } from '../components/treatments/TreatmentsManager';
 import { LogoCropperDialog } from '../components/clinic/LogoCropperDialog';
 import { LetterheadCropperDialog } from '../components/clinic/LetterheadCropperDialog';
+import { UsageMeters } from '../components/subscription/UsageMeters';
 
 const FB_CONFIG_ID = import.meta.env.VITE_FACEBOOK_CONFIG_ID;
+// Twilio Partner Solution ID (Meta App Dashboard → WhatsApp → Partner
+// Solutions). REQUIRED: without it, the customer's WABA is shared only
+// with our Meta app — Twilio can't access it, and sender registration
+// fails with Twilio error 63100 at the import_sender step.
+const FB_SOLUTION_ID = import.meta.env.VITE_FACEBOOK_SOLUTION_ID;
 const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
+
+// Meta's Embedded Signup postMessage returns only `phone_number_id` and
+// `waba_id` — never the dialable number. Twilio's Senders API needs the
+// number in E.164 for `sender_id`, so we collect it here before opening
+// the popup. See Twilio's Tech Provider integration guide: "If you allow
+// your customers to bring their own phone number... you must collect it
+// from your customers separately from the Embedded Signup flow."
+const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+
+function normalizeE164(input) {
+  const trimmed = String(input || '').trim();
+  if (!trimmed) return '';
+  const digits = trimmed.replace(/[^\d]/g, '');
+  if (!digits) return '';
+  return `+${digits}`;
+}
+
+function isValidE164(input) {
+  return E164_PATTERN.test(normalizeE164(input));
+}
 
 const emptyProfile = {
   name: '',
@@ -208,6 +238,9 @@ export default function Settings() {
 
   const [connectingWA, setConnectingWA] = useState(false);
   const [disconnectingWA, setDisconnectingWA] = useState(false);
+  // The WhatsApp number the clinic intends to register, collected before
+  // the Meta popup opens because Embedded Signup never returns it.
+  const [waNumberInput, setWaNumberInput] = useState('');
   // Live status snapshot fetched from GET /clinics/:id/whatsapp/status
   // while the clinic sits in the `activating` state. Contains template
   // approval progress so the panel can render a useful progress bar.
@@ -221,8 +254,6 @@ export default function Settings() {
   const signupAssetsRef = useRef({
     phoneNumberId: null,
     wabaId: null,
-    whatsappNumber: null,
-    businessDisplayName: null,
   });
 
   // Hydrate the editable profile whenever the clinic loads or changes.
@@ -230,11 +261,22 @@ export default function Settings() {
     setProfile(clinicToProfile(selectedClinic));
   }, [selectedClinic]);
 
-  // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the user
-  // finishes adding their phone number inside the popup, before FB.login's
-  // callback resolves. We keep the phone_number_id + waba_id (and, when
-  // Meta returns them, display name + phone) so activation can pre-fill
-  // the clinic profile.
+  // Seed the WhatsApp number field from whatever we already know about
+  // this clinic — the previously registered WhatsApp number if there is
+  // one, otherwise their contact phone. Saves retyping on reconnect and
+  // makes the common case a single click.
+  useEffect(() => {
+    const known =
+      selectedClinic?.whatsappConfig?.whatsappNumber || selectedClinic?.phone;
+    setWaNumberInput(known ? normalizeE164(known) : '');
+  }, [selectedClinicId, selectedClinic?.whatsappConfig?.whatsappNumber, selectedClinic?.phone]);
+
+  // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the
+  // user finishes the popup, before FB.login's callback resolves. Meta's
+  // FINISH payload carries only `phone_number_id` and `waba_id`; the
+  // dialable number comes from `waNumberInput` instead. Meta also reports
+  // ERROR events here, which are far more useful to surface than a
+  // generic failure later on.
   useEffect(() => {
     function handleSignupMessage(event) {
       if (!event.origin || !event.origin.endsWith('facebook.com')) return;
@@ -244,11 +286,14 @@ export default function Settings() {
         if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
         if (typeof data.event === 'string' && data.event.startsWith('FINISH')) {
           signupAssetsRef.current = {
-            phoneNumberId: data.data?.phone_number_id,
-            wabaId: data.data?.waba_id,
-            whatsappNumber: data.data?.display_phone_number || null,
-            businessDisplayName: data.data?.verified_name || null,
+            phoneNumberId: data.data?.phone_number_id || null,
+            wabaId: data.data?.waba_id || null,
           };
+        } else if (data.event === 'ERROR') {
+          toast.error(
+            data.data?.error_message ||
+              'Meta reported an error during WhatsApp onboarding.'
+          );
         }
       } catch {
         // non-JSON messages from other senders — ignore
@@ -259,16 +304,11 @@ export default function Settings() {
   }, []);
 
   const submitActivation = useCallback(
-    async (code) => {
-      const {
-        phoneNumberId,
-        wabaId,
-        whatsappNumber,
-        businessDisplayName,
-      } = signupAssetsRef.current;
-      if (!phoneNumberId || !wabaId) {
+    async (code, whatsappNumber) => {
+      const { phoneNumberId, wabaId } = signupAssetsRef.current;
+      if (!wabaId) {
         toast.error(
-          'Onboarding finished but Meta did not return a phone number. Please try again.'
+          'Onboarding finished but Meta did not return a WhatsApp Business Account. Please try again.'
         );
         return;
       }
@@ -279,7 +319,6 @@ export default function Settings() {
           phoneNumberId,
           wabaId,
           whatsappNumber,
-          businessDisplayName,
         });
         setSelectedClinic(res.data.data);
         toast.success(
@@ -291,12 +330,7 @@ export default function Settings() {
         );
       } finally {
         setConnectingWA(false);
-        signupAssetsRef.current = {
-          phoneNumberId: null,
-          wabaId: null,
-          whatsappNumber: null,
-          businessDisplayName: null,
-        };
+        signupAssetsRef.current = { phoneNumberId: null, wabaId: null };
       }
     },
     [selectedClinicId, setSelectedClinic]
@@ -309,6 +343,12 @@ export default function Settings() {
       );
       return;
     }
+    if (!FB_SOLUTION_ID) {
+      toast.error(
+        'Twilio Partner Solution is not configured. Set VITE_FACEBOOK_SOLUTION_ID in .env — without it the WABA is not shared with Twilio and activation will fail.'
+      );
+      return;
+    }
     if (!fbReady || !window.FB) {
       toast.error(
         fbError?.message ||
@@ -316,13 +356,17 @@ export default function Settings() {
       );
       return;
     }
+    // Captured now, before the popup opens: Meta's response never
+    // includes the dialable number but Twilio's Senders API requires it.
+    const whatsappNumber = normalizeE164(waNumberInput);
+    if (!isValidE164(whatsappNumber)) {
+      toast.error(
+        'Enter the WhatsApp number in international format, e.g. +919876543210.'
+      );
+      return;
+    }
 
-    signupAssetsRef.current = {
-      phoneNumberId: null,
-      wabaId: null,
-      whatsappNumber: null,
-      businessDisplayName: null,
-    };
+    signupAssetsRef.current = { phoneNumberId: null, wabaId: null };
 
     window.FB.login(
       (response) => {
@@ -333,13 +377,28 @@ export default function Settings() {
           }
           return;
         }
-        submitActivation(code);
+        submitActivation(code, whatsappNumber);
       },
       {
         config_id: FB_CONFIG_ID,
+        // Avoids "user is already logged in" errors when the button is
+        // clicked again without a page refresh.
+        auth_type: 'rerequest',
         response_type: 'code',
         override_default_response_type: true,
-        extras: { version: 'v4' },
+        extras: {
+          version: 'v4',
+          // Required so Meta's postMessage payload includes the WABA ID.
+          sessionInfoVersion: 3,
+          setup: {
+            // Twilio Partner Solution ID — shares the customer's WABA
+            // with BOTH our Meta app and Twilio, which is what allows
+            // the backend's POST /v2/Channels/Senders to register the
+            // number. The signup dialog will show a Meta-mandated note
+            // that we work with Twilio.
+            solutionID: FB_SOLUTION_ID,
+          },
+        },
       }
     );
   }
@@ -455,6 +514,8 @@ export default function Settings() {
   return (
     <Layout title="Settings">
       <div className="grid max-w-4xl gap-4">
+        <PlanSummaryCard />
+
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
             <div className="space-y-1">
@@ -637,6 +698,9 @@ export default function Settings() {
                 fbReady={fbReady}
                 fbError={fbError}
                 hasConfigId={!!FB_CONFIG_ID}
+                hasSolutionId={!!FB_SOLUTION_ID}
+                numberInput={waNumberInput}
+                onNumberInputChange={setWaNumberInput}
               />
             )}
           </CardContent>
@@ -674,6 +738,56 @@ export default function Settings() {
         onConfirm={handleLetterheadConfirm}
       />
     </Layout>
+  );
+}
+
+/**
+ * Plan state at a glance, with storage usage — the limit clinics hit first and
+ * the one they can't infer from anything else on this page. Full pricing and the
+ * plan switch live on `/settings/plans`.
+ */
+function PlanSummaryCard() {
+  const navigate = useNavigate();
+  const { can } = useAuth();
+  const { subscription, loading } = useClinic();
+
+  if (!can(PERMISSIONS.SUBSCRIPTION_MANAGE)) return null;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4 border-b">
+        <div className="space-y-1">
+          <CardTitle className="flex items-center gap-2">
+            <CreditCard className="size-4 text-primary" />
+            Plan &amp; billing
+            {subscription?.isTrialing ? (
+              <Badge variant="soft">Free trial</Badge>
+            ) : null}
+          </CardTitle>
+          <CardDescription>
+            {loading || !subscription
+              ? 'Your plan, limits and payment history.'
+              : subscription.isTrialing
+                ? `Your free trial has ${subscription.trialDaysRemaining} ${
+                    subscription.trialDaysRemaining === 1 ? 'day' : 'days'
+                  } left. Choose a plan to keep going.`
+                : `You are on the ${subscription.planName} plan, billed ${
+                    subscription.billingCycle === 'yearly' ? 'yearly' : 'monthly'
+                  }.`}
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate('/settings/plans')}
+        >
+          Manage plan
+        </Button>
+      </CardHeader>
+      <CardContent className="pt-6">
+        {loading ? <Skeleton className="h-10 w-full" /> : <UsageMeters storageOnly />}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1141,6 +1255,9 @@ function WhatsAppPanel({
   fbReady,
   fbError,
   hasConfigId,
+  hasSolutionId,
+  numberInput,
+  onNumberInputChange,
 }) {
   if (status === 'active') {
     return (
@@ -1171,6 +1288,9 @@ function WhatsAppPanel({
         fbReady={fbReady}
         fbError={fbError}
         hasConfigId={hasConfigId}
+        hasSolutionId={hasSolutionId}
+        numberInput={numberInput}
+        onNumberInputChange={onNumberInputChange}
       />
     );
   }
@@ -1181,7 +1301,98 @@ function WhatsAppPanel({
       fbReady={fbReady}
       fbError={fbError}
       hasConfigId={hasConfigId}
+      hasSolutionId={hasSolutionId}
+      numberInput={numberInput}
+      onNumberInputChange={onNumberInputChange}
     />
+  );
+}
+
+/**
+ * Shared number field + Connect button used by both the never-connected
+ * and previously-disconnected panels. The number must be collected
+ * before Meta's popup opens — Embedded Signup returns only IDs, and
+ * Twilio's Senders API needs E.164 for `sender_id`.
+ */
+function WhatsAppNumberForm({
+  numberInput,
+  onNumberInputChange,
+  onSubmit,
+  busy,
+  busyLabel,
+  submitLabel,
+  fbReady,
+  fbError,
+  hasConfigId,
+  hasSolutionId,
+}) {
+  const normalized = normalizeE164(numberInput);
+  const touched = numberInput.trim().length > 0;
+  const valid = isValidE164(normalized);
+  const configReady = hasConfigId && hasSolutionId;
+
+  return (
+    <div className="w-full max-w-sm space-y-3">
+      <div className="space-y-1.5 text-left">
+        <Label htmlFor="wa-number">WhatsApp number</Label>
+        <Input
+          id="wa-number"
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          placeholder="+919876543210"
+          value={numberInput}
+          onChange={(e) => onNumberInputChange(e.target.value)}
+          disabled={busy}
+          aria-invalid={touched && !valid}
+        />
+        <p className="text-[11px] text-muted-foreground">
+          Include the country code. Use the exact number you'll register
+          inside Meta's popup — they must match.
+        </p>
+        {touched && !valid && (
+          <p className="text-[11px] text-destructive">
+            Enter a valid international number, e.g. +919876543210.
+          </p>
+        )}
+      </div>
+
+      <Button
+        onClick={onSubmit}
+        disabled={busy || !fbReady || !configReady || !valid}
+        className="w-full bg-[#25D366] text-white hover:bg-[#1ebe57]"
+      >
+        {busy ? (
+          <>
+            <Loader2 className="size-4 animate-spin" /> {busyLabel}
+          </>
+        ) : (
+          <>
+            <MessageSquare className="size-4" /> {submitLabel}
+          </>
+        )}
+      </Button>
+
+      {!hasConfigId && (
+        <p className="text-[11px] text-destructive">
+          VITE_FACEBOOK_CONFIG_ID is missing. Add it to .env to enable this
+          button.
+        </p>
+      )}
+      {hasConfigId && !hasSolutionId && (
+        <p className="text-[11px] text-destructive">
+          VITE_FACEBOOK_SOLUTION_ID is missing. Without the Twilio Partner
+          Solution ID, Meta won't share the WhatsApp account with Twilio and
+          activation will fail.
+        </p>
+      )}
+      {configReady && !fbReady && !fbError && (
+        <p className="text-[11px] text-muted-foreground">Loading Meta SDK…</p>
+      )}
+      {fbError && (
+        <p className="text-[11px] text-destructive">{fbError.message}</p>
+      )}
+    </div>
   );
 }
 
@@ -1191,47 +1402,35 @@ function NotConnectedPanel({
   fbReady,
   fbError,
   hasConfigId,
+  hasSolutionId,
+  numberInput,
+  onNumberInputChange,
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
+    <div className="flex flex-col items-center gap-4 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
       <div className="flex size-12 items-center justify-center rounded-full bg-[#25D366]/10">
         <MessageSquare className="size-6 text-[#25D366]" />
       </div>
       <div className="space-y-1">
         <p className="text-sm font-semibold">No WhatsApp number connected</p>
         <p className="max-w-sm text-xs text-muted-foreground">
-          Connect through Meta's secure flow. Slotlii will import your
-          WhatsApp Business Account, provision messaging, and submit
+          Enter the number you want to use, then connect through Meta's
+          secure flow. Slotlii provisions messaging and submits your
           message templates for approval — usually done within minutes.
         </p>
       </div>
-      <Button
-        onClick={onConnect}
-        disabled={connecting || !fbReady || !hasConfigId}
-        className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
-      >
-        {connecting ? (
-          <>
-            <Loader2 className="size-4 animate-spin" /> Activating…
-          </>
-        ) : (
-          <>
-            <MessageSquare className="size-4" /> Connect WhatsApp
-          </>
-        )}
-      </Button>
-      {!hasConfigId && (
-        <p className="text-[11px] text-destructive">
-          VITE_FACEBOOK_CONFIG_ID is missing. Add it to .env to enable this
-          button.
-        </p>
-      )}
-      {hasConfigId && !fbReady && !fbError && (
-        <p className="text-[11px] text-muted-foreground">Loading Meta SDK…</p>
-      )}
-      {fbError && (
-        <p className="text-[11px] text-destructive">{fbError.message}</p>
-      )}
+      <WhatsAppNumberForm
+        numberInput={numberInput}
+        onNumberInputChange={onNumberInputChange}
+        onSubmit={onConnect}
+        busy={connecting}
+        busyLabel="Activating…"
+        submitLabel="Connect WhatsApp"
+        fbReady={fbReady}
+        fbError={fbError}
+        hasConfigId={hasConfigId}
+        hasSolutionId={hasSolutionId}
+      />
     </div>
   );
 }
@@ -1410,9 +1609,12 @@ function DisconnectedPanel({
   fbReady,
   fbError,
   hasConfigId,
+  hasSolutionId,
+  numberInput,
+  onNumberInputChange,
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
+    <div className="flex flex-col items-center gap-4 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
       <div className="flex size-12 items-center justify-center rounded-full bg-[#25D366]/10">
         <Link2Off className="size-6 text-[#25D366]" />
       </div>
@@ -1420,27 +1622,21 @@ function DisconnectedPanel({
         <p className="text-sm font-semibold">WhatsApp is disconnected</p>
         <p className="max-w-sm text-xs text-muted-foreground">
           Reconnecting reuses your existing Twilio setup — no template
-          re-approval needed.
+          re-approval needed. Confirm the number below before continuing.
         </p>
       </div>
-      <Button
-        onClick={onReconnect}
-        disabled={reconnecting || !fbReady || !hasConfigId}
-        className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
-      >
-        {reconnecting ? (
-          <>
-            <Loader2 className="size-4 animate-spin" /> Reconnecting…
-          </>
-        ) : (
-          <>
-            <MessageSquare className="size-4" /> Reconnect WhatsApp
-          </>
-        )}
-      </Button>
-      {fbError && (
-        <p className="text-[11px] text-destructive">{fbError.message}</p>
-      )}
+      <WhatsAppNumberForm
+        numberInput={numberInput}
+        onNumberInputChange={onNumberInputChange}
+        onSubmit={onReconnect}
+        busy={reconnecting}
+        busyLabel="Reconnecting…"
+        submitLabel="Reconnect WhatsApp"
+        fbReady={fbReady}
+        fbError={fbError}
+        hasConfigId={hasConfigId}
+        hasSolutionId={hasSolutionId}
+      />
     </div>
   );
 }

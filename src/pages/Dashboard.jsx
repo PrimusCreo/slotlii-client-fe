@@ -43,6 +43,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/common/status-badge';
+import { SubscriptionBanner } from '../components/subscription/SubscriptionBanner';
 
 // ── Theme tokens for status colors (kept consistent with the rest of the app)
 const STATUS_TOKENS = {
@@ -254,6 +255,9 @@ export default function Dashboard() {
           </Button>
         </div>
       </div>
+
+      {/* Billing first: if writes are locked, that explains every other nudge. */}
+      <SubscriptionBanner />
 
       <WhatsAppSetupBanner clinic={selectedClinic} onClick={() => navigate('/settings')} />
 

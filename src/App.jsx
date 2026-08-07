@@ -7,6 +7,7 @@ import { ThemeProvider } from './components/theme-provider';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
 import ProtectedRoute from './components/ProtectedRoute';
+import { UpgradeDialogHost } from './components/subscription/UpgradeDialog';
 import { PERMISSIONS } from '@/lib/permissions';
 
 import Login from './pages/Login';
@@ -22,6 +23,7 @@ import PatientDetail from './pages/PatientDetail';
 import Doctors from './pages/Doctors';
 import DoctorDetail from './pages/DoctorDetail';
 import Settings from './pages/Settings';
+import Plans from './pages/Plans';
 import Treatments from './pages/Treatments';
 import Billing from './pages/Billing';
 import NewBill from './pages/NewBill';
@@ -55,11 +57,13 @@ export default function App() {
                 <Route path="/doctors/:id" element={<ProtectedRoute requiredPermission={PERMISSIONS.DOCTORS_VIEW}><DoctorDetail /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute requiredPermission={PERMISSIONS.CLINIC_SETTINGS_MANAGE}><Settings /></ProtectedRoute>} />
                 <Route path="/settings/treatments" element={<ProtectedRoute requiredPermission={PERMISSIONS.TREATMENTS_MANAGE}><Treatments /></ProtectedRoute>} />
+                <Route path="/settings/plans" element={<ProtectedRoute requiredPermission={PERMISSIONS.SUBSCRIPTION_MANAGE}><Plans /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_VIEW}><Billing /></ProtectedRoute>} />
                 <Route path="/billing/new" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_MANAGE}><NewBill /></ProtectedRoute>} />
                 <Route path="/billing/:id" element={<ProtectedRoute requiredPermission={PERMISSIONS.BILLS_VIEW}><BillDetail /></ProtectedRoute>} />
                 <Route path="/users" element={<ProtectedRoute requiredPermission={PERMISSIONS.USERS_MANAGE}><Users /></ProtectedRoute>} />
               </Routes>
+              <UpgradeDialogHost />
               </NotificationProvider>
             </ClinicProvider>
           </AuthProvider>

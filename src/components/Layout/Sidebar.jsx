@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   CalendarCheck,
   Calendar,
+  CreditCard,
   Users,
   Stethoscope,
   Settings,
@@ -98,9 +99,17 @@ const navItems = [
     permission: PERMISSIONS.USERS_MANAGE,
   },
   {
+    path: '/settings/plans',
+    label: 'Plan & billing',
+    icon: CreditCard,
+    permission: PERMISSIONS.SUBSCRIPTION_MANAGE,
+  },
+  {
+    // `end` so the nested Plan & billing route doesn't light up Settings too.
     path: '/settings',
     label: 'Settings',
     icon: Settings,
+    end: true,
     permission: PERMISSIONS.CLINIC_SETTINGS_MANAGE,
   },
 ];
