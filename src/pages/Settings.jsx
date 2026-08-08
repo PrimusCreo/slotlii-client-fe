@@ -62,16 +62,91 @@ const SLOT_DURATION_OPTIONS = [15, 20, 30, 45, 60];
 // from your customers separately from the Embedded Signup flow."
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 
-function normalizeE164(input) {
-  const trimmed = String(input || '').trim();
-  if (!trimmed) return '';
-  const digits = trimmed.replace(/[^\d]/g, '');
-  if (!digits) return '';
-  return `+${digits}`;
+// Dial codes offered in the country selector. India first (primary
+// market), then alphabetical. Add entries here as Slotlii expands —
+// nothing else needs to change.
+const COUNTRY_CODES = [
+  { code: '+91', label: 'India +91' },
+  { code: '+61', label: 'Australia +61' },
+  { code: '+973', label: 'Bahrain +973' },
+  { code: '+880', label: 'Bangladesh +880' },
+  { code: '+55', label: 'Brazil +55' },
+  { code: '+1', label: 'Canada / USA +1' },
+  { code: '+33', label: 'France +33' },
+  { code: '+49', label: 'Germany +49' },
+  { code: '+62', label: 'Indonesia +62' },
+  { code: '+39', label: 'Italy +39' },
+  { code: '+81', label: 'Japan +81' },
+  { code: '+254', label: 'Kenya +254' },
+  { code: '+965', label: 'Kuwait +965' },
+  { code: '+60', label: 'Malaysia +60' },
+  { code: '+52', label: 'Mexico +52' },
+  { code: '+31', label: 'Netherlands +31' },
+  { code: '+64', label: 'New Zealand +64' },
+  { code: '+977', label: 'Nepal +977' },
+  { code: '+234', label: 'Nigeria +234' },
+  { code: '+968', label: 'Oman +968' },
+  { code: '+92', label: 'Pakistan +92' },
+  { code: '+63', label: 'Philippines +63' },
+  { code: '+974', label: 'Qatar +974' },
+  { code: '+966', label: 'Saudi Arabia +966' },
+  { code: '+65', label: 'Singapore +65' },
+  { code: '+27', label: 'South Africa +27' },
+  { code: '+34', label: 'Spain +34' },
+  { code: '+94', label: 'Sri Lanka +94' },
+  { code: '+66', label: 'Thailand +66' },
+  { code: '+971', label: 'UAE +971' },
+  { code: '+44', label: 'United Kingdom +44' },
+  { code: '+84', label: 'Vietnam +84' },
+];
+
+const DEFAULT_COUNTRY_CODE = '+91';
+
+// Longest-first so '+1' never shadows '+91'.
+const DIAL_CODES_BY_LENGTH = [...COUNTRY_CODES]
+  .map((c) => c.code)
+  .sort((a, b) => b.length - a.length);
+
+function digitsOnly(value) {
+  return String(value || '').replace(/[^\d]/g, '');
 }
 
-function isValidE164(input) {
-  return E164_PATTERN.test(normalizeE164(input));
+function joinE164(countryCode, nationalNumber) {
+  const national = digitsOnly(nationalNumber);
+  if (!national) return '';
+  return `${countryCode}${national}`;
+}
+
+function isValidE164(value) {
+  return E164_PATTERN.test(String(value || ''));
+}
+
+/**
+ * Split a stored phone value into { countryCode, nationalNumber } for the
+ * two-field editor.
+ *
+ * Only attempts dial-code detection when the value is explicitly
+ * international (leading '+'). A bare local number like '9010938782'
+ * would otherwise be misread as Turkey '+90' — so without the '+' we
+ * treat the whole thing as a national number under the default country.
+ */
+function splitPhone(value) {
+  const raw = String(value || '').trim();
+  const national = digitsOnly(raw);
+  if (!national) {
+    return { countryCode: DEFAULT_COUNTRY_CODE, nationalNumber: '' };
+  }
+  if (raw.startsWith('+')) {
+    const withPlus = `+${national}`;
+    const match = DIAL_CODES_BY_LENGTH.find((code) => withPlus.startsWith(code));
+    if (match) {
+      return {
+        countryCode: match,
+        nationalNumber: withPlus.slice(match.length),
+      };
+    }
+  }
+  return { countryCode: DEFAULT_COUNTRY_CODE, nationalNumber: national };
 }
 
 const emptyProfile = {
@@ -239,8 +314,11 @@ export default function Settings() {
   const [connectingWA, setConnectingWA] = useState(false);
   const [disconnectingWA, setDisconnectingWA] = useState(false);
   // The WhatsApp number the clinic intends to register, collected before
-  // the Meta popup opens because Embedded Signup never returns it.
-  const [waNumberInput, setWaNumberInput] = useState('');
+  // the Meta popup opens because Embedded Signup never returns it. Split
+  // into dial code + national digits so the country code is picked, not
+  // typed.
+  const [waCountryCode, setWaCountryCode] = useState(DEFAULT_COUNTRY_CODE);
+  const [waNationalNumber, setWaNationalNumber] = useState('');
   // Live status snapshot fetched from GET /clinics/:id/whatsapp/status
   // while the clinic sits in the `activating` state. Contains template
   // approval progress so the panel can render a useful progress bar.
@@ -261,20 +339,22 @@ export default function Settings() {
     setProfile(clinicToProfile(selectedClinic));
   }, [selectedClinic]);
 
-  // Seed the WhatsApp number field from whatever we already know about
+  // Seed the WhatsApp number fields from whatever we already know about
   // this clinic — the previously registered WhatsApp number if there is
   // one, otherwise their contact phone. Saves retyping on reconnect and
   // makes the common case a single click.
   useEffect(() => {
     const known =
       selectedClinic?.whatsappConfig?.whatsappNumber || selectedClinic?.phone;
-    setWaNumberInput(known ? normalizeE164(known) : '');
+    const { countryCode, nationalNumber } = splitPhone(known);
+    setWaCountryCode(countryCode);
+    setWaNationalNumber(nationalNumber);
   }, [selectedClinicId, selectedClinic?.whatsappConfig?.whatsappNumber, selectedClinic?.phone]);
 
   // Listen for Meta's WA_EMBEDDED_SIGNUP postMessage. It fires once the
   // user finishes the popup, before FB.login's callback resolves. Meta's
   // FINISH payload carries only `phone_number_id` and `waba_id`; the
-  // dialable number comes from `waNumberInput` instead. Meta also reports
+  // dialable number comes from the number fields instead. Meta also reports
   // ERROR events here, which are far more useful to surface than a
   // generic failure later on.
   useEffect(() => {
@@ -358,10 +438,10 @@ export default function Settings() {
     }
     // Captured now, before the popup opens: Meta's response never
     // includes the dialable number but Twilio's Senders API requires it.
-    const whatsappNumber = normalizeE164(waNumberInput);
+    const whatsappNumber = joinE164(waCountryCode, waNationalNumber);
     if (!isValidE164(whatsappNumber)) {
       toast.error(
-        'Enter the WhatsApp number in international format, e.g. +919876543210.'
+        'Enter a valid WhatsApp number for the selected country code.'
       );
       return;
     }
@@ -699,8 +779,10 @@ export default function Settings() {
                 fbError={fbError}
                 hasConfigId={!!FB_CONFIG_ID}
                 hasSolutionId={!!FB_SOLUTION_ID}
-                numberInput={waNumberInput}
-                onNumberInputChange={setWaNumberInput}
+                countryCode={waCountryCode}
+                onCountryCodeChange={setWaCountryCode}
+                nationalNumber={waNationalNumber}
+                onNationalNumberChange={setWaNationalNumber}
               />
             )}
           </CardContent>
@@ -1256,8 +1338,10 @@ function WhatsAppPanel({
   fbError,
   hasConfigId,
   hasSolutionId,
-  numberInput,
-  onNumberInputChange,
+  countryCode,
+  onCountryCodeChange,
+  nationalNumber,
+  onNationalNumberChange,
 }) {
   if (status === 'active') {
     return (
@@ -1289,8 +1373,10 @@ function WhatsAppPanel({
         fbError={fbError}
         hasConfigId={hasConfigId}
         hasSolutionId={hasSolutionId}
-        numberInput={numberInput}
-        onNumberInputChange={onNumberInputChange}
+        countryCode={countryCode}
+        onCountryCodeChange={onCountryCodeChange}
+        nationalNumber={nationalNumber}
+        onNationalNumberChange={onNationalNumberChange}
       />
     );
   }
@@ -1302,8 +1388,10 @@ function WhatsAppPanel({
       fbError={fbError}
       hasConfigId={hasConfigId}
       hasSolutionId={hasSolutionId}
-      numberInput={numberInput}
-      onNumberInputChange={onNumberInputChange}
+      countryCode={countryCode}
+      onCountryCodeChange={onCountryCodeChange}
+      nationalNumber={nationalNumber}
+      onNationalNumberChange={onNationalNumberChange}
     />
   );
 }
@@ -1315,8 +1403,10 @@ function WhatsAppPanel({
  * Twilio's Senders API needs E.164 for `sender_id`.
  */
 function WhatsAppNumberForm({
-  numberInput,
-  onNumberInputChange,
+  countryCode,
+  onCountryCodeChange,
+  nationalNumber,
+  onNationalNumberChange,
   onSubmit,
   busy,
   busyLabel,
@@ -1326,33 +1416,54 @@ function WhatsAppNumberForm({
   hasConfigId,
   hasSolutionId,
 }) {
-  const normalized = normalizeE164(numberInput);
-  const touched = numberInput.trim().length > 0;
-  const valid = isValidE164(normalized);
+  const combined = joinE164(countryCode, nationalNumber);
+  const touched = nationalNumber.length > 0;
+  const valid = isValidE164(combined);
   const configReady = hasConfigId && hasSolutionId;
 
   return (
     <div className="w-full max-w-sm space-y-3">
       <div className="space-y-1.5 text-left">
         <Label htmlFor="wa-number">WhatsApp number</Label>
-        <Input
-          id="wa-number"
-          type="tel"
-          inputMode="tel"
-          autoComplete="tel"
-          placeholder="+919876543210"
-          value={numberInput}
-          onChange={(e) => onNumberInputChange(e.target.value)}
-          disabled={busy}
-          aria-invalid={touched && !valid}
-        />
+        <div className="flex gap-2">
+          <select
+            aria-label="Country code"
+            value={countryCode}
+            onChange={(e) => onCountryCodeChange(e.target.value)}
+            disabled={busy}
+            className="h-9 w-[132px] shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {COUNTRY_CODES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          <Input
+            id="wa-number"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel-national"
+            placeholder="9876543210"
+            value={nationalNumber}
+            onChange={(e) => onNationalNumberChange(digitsOnly(e.target.value))}
+            disabled={busy}
+            aria-invalid={touched && !valid}
+          />
+        </div>
         <p className="text-[11px] text-muted-foreground">
-          Include the country code. Use the exact number you'll register
-          inside Meta's popup — they must match.
+          {combined ? (
+            <>
+              Will register <span className="font-medium">{combined}</span> —
+              use this exact number inside Meta's popup.
+            </>
+          ) : (
+            "Use the exact number you'll register inside Meta's popup — they must match."
+          )}
         </p>
         {touched && !valid && (
           <p className="text-[11px] text-destructive">
-            Enter a valid international number, e.g. +919876543210.
+            That doesn't look like a valid number for {countryCode}.
           </p>
         )}
       </div>
@@ -1403,8 +1514,10 @@ function NotConnectedPanel({
   fbError,
   hasConfigId,
   hasSolutionId,
-  numberInput,
-  onNumberInputChange,
+  countryCode,
+  onCountryCodeChange,
+  nationalNumber,
+  onNationalNumberChange,
 }) {
   return (
     <div className="flex flex-col items-center gap-4 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
@@ -1420,8 +1533,10 @@ function NotConnectedPanel({
         </p>
       </div>
       <WhatsAppNumberForm
-        numberInput={numberInput}
-        onNumberInputChange={onNumberInputChange}
+        countryCode={countryCode}
+        onCountryCodeChange={onCountryCodeChange}
+        nationalNumber={nationalNumber}
+        onNationalNumberChange={onNationalNumberChange}
         onSubmit={onConnect}
         busy={connecting}
         busyLabel="Activating…"
@@ -1610,8 +1725,10 @@ function DisconnectedPanel({
   fbError,
   hasConfigId,
   hasSolutionId,
-  numberInput,
-  onNumberInputChange,
+  countryCode,
+  onCountryCodeChange,
+  nationalNumber,
+  onNationalNumberChange,
 }) {
   return (
     <div className="flex flex-col items-center gap-4 rounded-md border border-dashed bg-muted/20 px-6 py-8 text-center">
@@ -1626,8 +1743,10 @@ function DisconnectedPanel({
         </p>
       </div>
       <WhatsAppNumberForm
-        numberInput={numberInput}
-        onNumberInputChange={onNumberInputChange}
+        countryCode={countryCode}
+        onCountryCodeChange={onCountryCodeChange}
+        nationalNumber={nationalNumber}
+        onNationalNumberChange={onNationalNumberChange}
         onSubmit={onReconnect}
         busy={reconnecting}
         busyLabel="Reconnecting…"
