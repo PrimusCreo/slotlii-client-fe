@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, Lock } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
+import { usePlanCatalog } from '../../hooks/usePlanCatalog';
 import {
   Dialog,
   DialogContent,
@@ -14,7 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { PERMISSIONS } from '@/lib/permissions';
 import { onPlanRestriction } from '@/lib/planRestrictions';
-import { formatBytes, getPlan, priceFor, formatRupees } from '@/lib/plans';
+import { findPlan, formatBytes, formatRupees } from '@/lib/plans';
 
 /**
  * Global handler for plan restrictions raised by any API call.
@@ -28,6 +29,9 @@ export function UpgradeDialogHost() {
   const navigate = useNavigate();
   const location = useLocation();
   const { can } = useAuth();
+  // The backend names the tier that would unlock the action; the catalog is what
+  // turns that code into a name and a price worth quoting.
+  const { plans } = usePlanCatalog();
 
   useEffect(() => onPlanRestriction(setRestriction), []);
 
@@ -38,7 +42,7 @@ export function UpgradeDialogHost() {
 
   if (!restriction) return null;
 
-  const copy = restrictionCopy(restriction);
+  const copy = restrictionCopy(restriction, plans);
   const canManage = can(PERMISSIONS.SUBSCRIPTION_MANAGE);
 
   return (
@@ -78,8 +82,8 @@ export function UpgradeDialogHost() {
   );
 }
 
-function restrictionCopy({ code, message, meta }) {
-  const requiredPlan = getPlan(meta.requiredPlan);
+function restrictionCopy({ code, message, meta }, plans) {
+  const requiredPlan = findPlan(plans, meta.requiredPlan);
 
   if (code === 'SUBSCRIPTION_INACTIVE') {
     return {
@@ -97,7 +101,7 @@ function restrictionCopy({ code, message, meta }) {
       body: message,
       detail: requiredPlan
         ? `${requiredPlan.name} is ${formatRupees(
-            priceFor(requiredPlan.code, 'monthly').amount,
+            requiredPlan.pricing.monthly.amount,
           )} a month, or 11 months' price when billed yearly.`
         : null,
       cta: requiredPlan ? `Upgrade to ${requiredPlan.name}` : 'View plans',

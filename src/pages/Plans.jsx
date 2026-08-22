@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Info, Loader2, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
@@ -37,7 +37,8 @@ import { FeatureComparison } from '../components/subscription/FeatureComparison'
 import { PlanCard } from '../components/subscription/PlanCard';
 import { UsageMeters } from '../components/subscription/UsageMeters';
 import { startSubscriptionCheckout } from '../components/subscription/cashfreeCheckout';
-import { PLAN_ORDER, PLANS, formatRupees, rankOf } from '@/lib/plans';
+import { usePlanCatalog } from '../hooks/usePlanCatalog';
+import { formatRupees, rankOf } from '@/lib/plans';
 
 const STATUS_LABEL = {
   trialing: { label: 'Free trial', variant: 'soft' },
@@ -60,6 +61,10 @@ function formatDate(value) {
 
 export default function Plans() {
   const { subscription, reloadClinic } = useClinic();
+  // Tiers come from the API: the catalog lives in the database so it can be
+  // repriced and retired without a deploy. Empty until it arrives, so the cards
+  // fill in rather than needing a skeleton of their own.
+  const { plans } = usePlanCatalog();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [billingCycle, setBillingCycle] = useState('monthly');
@@ -126,8 +131,6 @@ export default function Plans() {
    */
   const isTrialing = status === 'trialing';
 
-  const plans = useMemo(() => PLAN_ORDER.map((code) => PLANS[code]), []);
-
   async function handleSelect(planCode) {
     setCheckoutPlan(planCode);
     try {
@@ -165,7 +168,9 @@ export default function Plans() {
         ? 'Current plan'
         : `Switch to ${billingCycle}`;
     }
-    return rankOf(planCode) > rankOf(currentPlanCode) ? 'Upgrade' : 'Downgrade';
+    return rankOf(plans, planCode) > rankOf(plans, currentPlanCode)
+      ? 'Upgrade'
+      : 'Downgrade';
   }
 
   return (
@@ -291,6 +296,8 @@ function CurrentPlanCard({ subscription, statusMeta, syncing, onCancel }) {
     trialEndsAt,
     amount,
     cancelAtPeriodEnd,
+    isLegacyPrice,
+    listAmount,
   } = subscription;
 
   const isTrialing = status === 'trialing';
@@ -352,6 +359,16 @@ function CurrentPlanCard({ subscription, statusMeta, syncing, onCancel }) {
           }
         />
         <Stat label={renewalLabel} value={formatDate(renewalDate)} />
+        {/* This tier has been repriced since they subscribed. Their mandate is
+            bound to the old amount, so say so before they wonder why the card
+            above and the pricing table disagree. */}
+        {isLegacyPrice && !isTrialing ? (
+          <p className="sm:col-span-3 text-xs text-muted-foreground">
+            You're on an earlier price for {planName} — {formatRupees(amount)} rather
+            than the {formatRupees(listAmount)} it lists at today. That stays as it is
+            for as long as you keep this plan.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

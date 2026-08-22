@@ -3,15 +3,16 @@ import { Check, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { formatRupees, priceFor } from '@/lib/plans';
+import { formatRupees } from '@/lib/plans';
 
 /**
- * One pricing tier.
+ * One pricing tier, as returned by `GET /api/subscription/plans`.
  *
  * The MRP is struck through next to the live price so the discount is visible
  * without a separate "save X%" badge competing for attention. On yearly, that
  * struck price is 12x the monthly rate, which makes the free month the thing
- * being communicated.
+ * being communicated. Both figures come precomputed in `plan.pricing` — the
+ * yearly-is-11-months rule is the backend's to own.
  */
 export function PlanCard({
   plan,
@@ -23,8 +24,10 @@ export function PlanCard({
   onSelect,
   ctaLabel,
 }) {
-  const price = priceFor(plan.code, billingCycle);
+  const price = plan.pricing?.[billingCycle];
   const isYearly = billingCycle === 'yearly';
+
+  if (!price) return null;
 
   return (
     <div
@@ -57,14 +60,16 @@ export function PlanCard({
             {isYearly ? '/year' : '/month'}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground line-through">
-            {formatRupees(price.mrp)}
-          </span>
-          <span className="font-medium text-primary">
-            Save {formatRupees(price.savings)}
-          </span>
-        </div>
+        {price.savings > 0 ? (
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground line-through">
+              {formatRupees(price.mrp)}
+            </span>
+            <span className="font-medium text-primary">
+              Save {formatRupees(price.savings)}
+            </span>
+          </div>
+        ) : null}
         {isYearly ? (
           <p className="text-xs text-muted-foreground">
             Works out to {formatRupees(price.perMonth)} a month
@@ -90,7 +95,7 @@ export function PlanCard({
       ) : null}
 
       <ul className="mt-6 space-y-2.5 text-sm">
-        {plan.featureList.map((feature) => (
+        {(plan.featureList || []).map((feature) => (
           <li key={feature.label} className="flex gap-2.5">
             <Check className="mt-0.5 size-4 shrink-0 text-primary" />
             <span className="text-muted-foreground">

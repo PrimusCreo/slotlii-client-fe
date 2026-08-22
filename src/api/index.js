@@ -13,6 +13,26 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+function isPublicAuthPath(pathname) {
+  return (
+    pathname === '/login' ||
+    pathname === '/signup' ||
+    pathname === '/verify-email' ||
+    pathname === '/set-password' ||
+    pathname === '/accept-invite' ||
+    pathname.startsWith('/sign/')
+  );
+}
+
+function isAuthAttemptUrl(url = '') {
+  return /\/auth\/(login|signup|verify-email|set-password|accept-staff-invite|resend-verification|invite)\b/.test(
+    url
+  );
+}
+
+// Guard so concurrent 401s cannot stack full-page navigations.
+let redirectingToLogin = false;
+
 // ── Request interceptor — attach JWT token ──────────────
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('slotlii_client_token');
@@ -36,17 +56,25 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
-      const isLoginRequest = error.config?.url?.includes('/auth/login');
-      // Don't bounce visitors who are on a public page (e.g. the patient
-      // signing a consent link). Those pages must remain reachable even if
-      // there's a stale token in localStorage from a previous session on
-      // the same device.
+      const requestUrl = error.config?.url || '';
+      // Failed credential / invite flows must stay on the current page so
+      // the form can show the error. A hard redirect here would wipe it.
+      if (isAuthAttemptUrl(requestUrl)) {
+        return Promise.reject(error);
+      }
+
+      // Public auth pages (login, signup, invite, patient sign) stay put.
+      // Reloading `/login` on every 401 was an infinite loop: globally
+      // mounted hosts (e.g. the upgrade dialog) fetch authenticated APIs
+      // while logged out, get 401, bounce to `/login`, and repeat until
+      // the backend rate limiter starts rejecting the real login too.
       const onPublicPage =
         typeof window !== 'undefined' &&
-        /^\/sign\//.test(window.location.pathname);
-      if (!isLoginRequest && !onPublicPage) {
+        isPublicAuthPath(window.location.pathname);
+      if (!onPublicPage && !redirectingToLogin) {
+        redirectingToLogin = true;
         localStorage.removeItem('slotlii_client_token');
-        window.location.href = '/login';
+        window.location.assign('/login');
       }
     }
     return Promise.reject(error);

@@ -29,13 +29,21 @@ function GmailIcon({ className = 'size-4' }) {
 }
 
 export default function Login() {
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="size-6 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   if (isAuthenticated) return <Navigate to="/" replace />;
 

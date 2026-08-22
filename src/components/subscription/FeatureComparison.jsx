@@ -2,18 +2,33 @@ import { Fragment } from 'react';
 import { Check, Minus } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { usePlanCatalog } from '../../hooks/usePlanCatalog';
 import { cn } from '@/lib/utils';
-import { COMPARISON_GROUPS, PLAN_ORDER, PLANS } from '@/lib/plans';
+import { COMPARISON_GROUPS } from '@/lib/plans';
 
 /**
  * Full side-by-side plan comparison, rendered under the plan cards.
  *
  * The cards carry the highlights; this is for the person who wants to check one
- * specific thing before committing. Rows come from `COMPARISON_GROUPS` in the
- * plan catalog so the table can't drift from the entitlements it describes.
+ * specific thing before committing. `COMPARISON_GROUPS` supplies the row layout
+ * and each row reads its value off the live tier, so the table can't drift from
+ * the entitlements it describes — and a tier an admin adds gets a column for free.
  */
 export function FeatureComparison({ currentPlanCode, className }) {
-  const plans = PLAN_ORDER.map((code) => PLANS[code]);
+  const { plans, loading } = usePlanCatalog();
+
+  if (loading) {
+    return (
+      <div className={cn('space-y-2', className)}>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-8 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  if (plans.length === 0) return null;
 
   return (
     <div className={cn('overflow-x-auto', className)}>
